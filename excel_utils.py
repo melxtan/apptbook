@@ -2,6 +2,8 @@ import pandas as pd
 from io import BytesIO
 from redcap import fetch_redcap_data, parse_redcap_to_df, filter_new_records, update_mrn_sheet
 import streamlit as st
+from openpyxl import load_workbook
+from openpyxl.styles import Font
 
 
 def process_files(csv_file, excel_file):
@@ -22,6 +24,7 @@ def process_files(csv_file, excel_file):
     new_data = df_csv.copy()
     new_data.reset_index(drop=True, inplace=True)
     combined_new_op = pd.concat([new_op_df, new_data], ignore_index=True)
+    new_rows_start_idx = len(combined_new_op) - len(new_data)
 
     # Step 3: Parse columns D, E, H as datetime/time for sorting
     combined_new_op[3] = pd.to_datetime(combined_new_op[3], errors='coerce')  # Column D
@@ -44,12 +47,24 @@ def process_files(csv_file, excel_file):
     combined_new_op[3] = combined_new_op[3].dt.strftime("%m/%d/%Y")  # D
     combined_new_op[7] = combined_new_op[7].dt.strftime("%m/%d/%Y")  # H
 
-    # Step 8: Write back to Excel
+    # Step 8: Write to Excel
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         combined_new_op.to_excel(writer, index=False, header=False, sheet_name="New OP")
         ip_df.to_excel(writer, index=False, header=False, sheet_name="IP")
         updated_mrn_df.to_excel(writer, index=False, header=True, sheet_name="MRN")
 
+    # Step 9: Apply red font to appended rows in New OP
     output.seek(0)
-    return output
+    wb = load_workbook(output)
+    ws = wb["New OP"]
+    red_font = Font(color="FF0000")
+
+    for row in ws.iter_rows(min_row=new_rows_start_idx + 1, max_row=ws.max_row):
+        for cell in row:
+            cell.font = red_font
+
+    final_output = BytesIO()
+    wb.save(final_output)
+    final_output.seek(0)
+    return final_output
