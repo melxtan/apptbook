@@ -4,6 +4,7 @@ import requests
 from openpyxl import load_workbook
 from openpyxl.styles import Font
 from io import BytesIO
+from dateutil import parser
 
 st.set_page_config(layout="wide")
 st.title("Automated REDCap & Excel Workflow")
@@ -11,6 +12,20 @@ st.title("Automated REDCap & Excel Workflow")
 excel_file = st.file_uploader("Upload Excel File (.xlsx)", type=["xlsx"])
 
 api_keys = [st.secrets["redcap_api_1"], st.secrets["redcap_api_2"]]
+
+def parse_excel_date(val):
+    """Try to parse any value to a date, else return original."""
+    if val is None or val == "":
+        return None
+    if isinstance(val, (pd.Timestamp, )):
+        return val.to_pydatetime()
+    if isinstance(val, str):
+        try:
+            dt = parser.parse(val)
+            return dt
+        except Exception:
+            return val
+    return val
 
 def parse_json_to_excel(json_data, ws_mrn):
     existing_case_ids = set()
@@ -47,17 +62,21 @@ def move_routine_to_newop(wb):
         row_vals = [ws_routine.cell(row=i, column=c).value for c in range(1, 23)]
         if any([v is not None and str(v).strip() != "" for v in row_vals]):
             data_rows.append(row_vals)
-            if row_vals[0]:  # MRN (col 1)
+            if row_vals[0]:
                 mrn_set.add(str(row_vals[0]))
 
     if not data_rows:
         return 0
 
-    # 2. Copy new rows to New OP at the bottom
+    # 2. Copy new rows to New OP at the bottom, D and H as parsed dates
     insert_row = ws_newop.max_row + 1
     for r, row in enumerate(data_rows, insert_row):
         for c, val in enumerate(row, 1):
-            ws_newop.cell(row=r, column=c, value=val)
+            if c in [4, 8]:  # D or H
+                cell_value = parse_excel_date(val)
+            else:
+                cell_value = val
+            ws_newop.cell(row=r, column=c, value=cell_value)
 
     # 3. Set date & time formats for cols D (4), E (5), H (8)
     for cell in ws_newop['D']:
@@ -68,7 +87,6 @@ def move_routine_to_newop(wb):
         cell.number_format = 'mm/dd/yyyy'
 
     # 4. Deduplicate: treat first row as header, dedup A:AA (columns 1-27)
-    #   - Copy all to DataFrame, dedup on columns 0-25 (A-AA), keep first
     all_data = []
     for row in ws_newop.iter_rows(values_only=True):
         all_data.append(list(row) + [None]*(27 - len(row)))
@@ -79,11 +97,15 @@ def move_routine_to_newop(wb):
     data = all_data[1:]
     df = pd.DataFrame(data)
     df_dedup = df.drop_duplicates(subset=list(range(27)), keep='first')
-    # Write back header + data
     ws_newop.delete_rows(2, ws_newop.max_row - 1)
     for i, row in enumerate(df_dedup.values.tolist(), 2):
         for j, val in enumerate(row, 1):
-            ws_newop.cell(row=i, column=j, value=val)
+            # Convert to date for D/H
+            if j in [4, 8]:
+                cell_value = parse_excel_date(val)
+            else:
+                cell_value = val
+            ws_newop.cell(row=i, column=j, value=cell_value)
 
     # 5. VLOOKUPs: Fill X (24), Z (26), AA (27) using MRN lookups
     mrn_data = []
@@ -109,7 +131,6 @@ def move_routine_to_newop(wb):
                 ws_newop.cell(row=row_idx, column=27).value = mrn_dict_firstres.get(str(col_b), "")
 
     # 6. Mark in red only the new rows (from current Routine), that survived dedup
-    #   - Find which rows in New OP after dedup have MRN from the most recent paste.
     red_count = 0
     for row in ws_newop.iter_rows(min_row=2, max_row=ws_newop.max_row):
         if row[0].value and str(row[0].value) in mrn_set:
