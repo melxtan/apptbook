@@ -67,7 +67,7 @@ if uploaded_file:
             df_local = xl.parse("New OP", header=None)
             df_share = xl_sharepoint.parse("New OP", header=None)
             if df_local.shape[1] >= 23 and df_share.shape[1] >= 23:
-                df_local.iloc[:, 22] = df_share.iloc[:, 22]  # Column W is index 22
+                df_local.iloc[:, 22] = df_share.iloc[:, 22].values[:len(df_local)]  # Column W is index 22
                 df_updated_notes = df_local.copy()
                 st.success("Notes column W updated from SharePoint file.")
             else:
