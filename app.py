@@ -31,7 +31,11 @@ if use_redcap:
             new_records = filter_new_records(df_redcap, existing_mrn_df)
             updated_mrn_df = update_mrn_sheet(existing_mrn_df, new_records)
 
-            output_mrn = updated_mrn_df.to_excel(index=False, engine="openpyxl")
-            st.download_button("Download Updated MRN Sheet", output_mrn, file_name="Updated_MRN.xlsx")
+            output_mrn = BytesIO()
+            with pd.ExcelWriter(output_mrn, engine="openpyxl") as writer:
+                updated_mrn_df.to_excel(writer, index=False, sheet_name="MRN")
+            output_mrn.seek(0)
+
+            st.download_button("Download Updated MRN Sheet", output_mrn.getvalue(), file_name="Updated_MRN.xlsx")
     except Exception as e:
         st.error(f"Error fetching REDCap data: {e}")
