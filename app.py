@@ -6,7 +6,7 @@ from openpyxl.styles import Font
 from io import BytesIO
 
 st.set_page_config(layout="wide")
-st.title("Automated REDCap & Excel Workflow (Excel-only Upload Version)")
+st.title("Automated REDCap & Excel Workflow")
 
 excel_file = st.file_uploader("Upload Excel File (.xlsx)", type=["xlsx"])
 
