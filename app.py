@@ -105,6 +105,11 @@ if uploaded_file:
         df_processed_op = df_merged.copy()
         st.success("Outpatient data processed and merged with Routine.")
 
+    # --- Copy logic to handle IP tab as well (no headers) ---
+    if "IP" in xl.sheet_names:
+        df_ip = xl.parse("IP", header=None)
+        st.success("'IP' sheet loaded successfully for downstream integration.")
+
     # --- Export everything ---
     if df_combined is not None or df_updated_notes is not None or df_processed_op is not None:
         with pd.ExcelWriter("Combined_Processed_File.xlsx", engine="xlsxwriter") as writer:
@@ -114,6 +119,8 @@ if uploaded_file:
                 df_processed_op.to_excel(writer, index=False, sheet_name="New OP", header=False)
             elif df_updated_notes is not None:
                 df_updated_notes.to_excel(writer, index=False, sheet_name="New OP", header=False)
+            if 'df_ip' in locals():
+                df_ip.to_excel(writer, index=False, sheet_name="IP", header=False)
 
         with open("Combined_Processed_File.xlsx", "rb") as f:
             st.download_button("Download Combined Processed File", f, file_name="Combined_Processed_File.xlsx")
