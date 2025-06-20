@@ -1,48 +1,37 @@
+import streamlit as st
+from excel_utils import process_files
+from redcap import fetch_redcap_data, parse_redcap_to_df, filter_new_records, update_mrn_sheet
 import pandas as pd
-from io import BytesIO
 
-def process_files(csv_file, excel_file):
-    df_csv = pd.read_csv(csv_file)
-    xl = pd.ExcelFile(excel_file)
+st.title("Daily Excel Macro Replacement")
 
-    new_op_df = xl.parse("New OP", header=None)
-    ip_df = xl.parse("IP", header=None)
-    mrn_df = xl.parse("MRN", header=None)
+csv_file = st.file_uploader("Upload CSV file", type="csv")
+excel_file = st.file_uploader("Upload Excel file", type="xlsx")
 
-    # Step 1: Append CSV to New OP
-    new_data = df_csv.copy()
-    new_data.reset_index(drop=True, inplace=True)
-    combined_new_op = pd.concat([new_op_df, new_data], ignore_index=True)
+if csv_file and excel_file:
+    output = process_files(csv_file, excel_file)
+    st.success("Processing complete. Download updated file below.")
+    st.download_button("Download Updated Excel", output.getvalue(), file_name="Processed_Apptbook.xlsx")
 
-    # Step 2: Format columns
-    def to_datetime_safe(series, fmt):
-        try:
-            return pd.to_datetime(series, errors='coerce').dt.strftime(fmt)
-        except:
-            return series
+st.header("REDCap MRN Data Integration")
 
-    combined_new_op[3] = to_datetime_safe(combined_new_op[3], "%m/%d/%Y")
-    combined_new_op[4] = pd.to_datetime(combined_new_op[4], errors='coerce').dt.strftime("%H:%M")
-    combined_new_op[7] = to_datetime_safe(combined_new_op[7], "%m/%d/%Y")
+use_redcap = st.checkbox("Fetch and update MRN sheet from REDCap")
+if use_redcap:
+    api_key = st.secrets["REDCAP"]["KEY_1"]
+    try:
+        redcap_data = fetch_redcap_data(api_key)
+        df_redcap = parse_redcap_to_df(redcap_data)
 
-    # Step 3: Sort
-    combined_new_op = combined_new_op.sort_values(by=[3, 4], ignore_index=True)
+        st.write("Fetched REDCap Records:", df_redcap.head())
 
-    # Step 4: Simulate VLOOKUP
-    mrn_lookup = mrn_df.set_index(0)
-    combined_new_op[23] = combined_new_op[1].map(mrn_lookup[1].to_dict())
-    combined_new_op[25] = combined_new_op[1].map(mrn_lookup[5].to_dict())
-    combined_new_op[26] = combined_new_op[1].map(mrn_lookup[6].to_dict())
+        uploaded_mrn = st.file_uploader("Upload Existing MRN Sheet", type="xlsx")
+        if uploaded_mrn:
+            xl = pd.ExcelFile(uploaded_mrn)
+            existing_mrn_df = xl.parse("MRN", header=0)
+            new_records = filter_new_records(df_redcap, existing_mrn_df)
+            updated_mrn_df = update_mrn_sheet(existing_mrn_df, new_records)
 
-    # Step 5: Remove duplicates
-    combined_new_op = combined_new_op.drop_duplicates(subset=range(0, 27))
-
-    # Step 6: Write back to Excel
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        combined_new_op.to_excel(writer, index=False, header=False, sheet_name="New OP")
-        ip_df.to_excel(writer, index=False, header=False, sheet_name="IP")
-        mrn_df.to_excel(writer, index=False, header=False, sheet_name="MRN")
-
-    output.seek(0)
-    return output
+            output_mrn = updated_mrn_df.to_excel(index=False, engine="openpyxl")
+            st.download_button("Download Updated MRN Sheet", output_mrn, file_name="Updated_MRN.xlsx")
+    except Exception as e:
+        st.error(f"Error fetching REDCap data: {e}")
