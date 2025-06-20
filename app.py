@@ -64,17 +64,20 @@ if uploaded_file:
     if sharepoint_file and "New OP" in xl.sheet_names:
         xl_sharepoint = pd.ExcelFile(sharepoint_file)
         if "New OP" in xl_sharepoint.sheet_names:
-            df_local = xl.parse("New OP")
-            df_share = xl_sharepoint.parse("New OP")
-            df_local["W"] = df_share["W"]
-            df_updated_notes = df_local.copy()
-            st.success("Notes column W updated from SharePoint file.")
+            df_local = xl.parse("New OP", header=None)
+            df_share = xl_sharepoint.parse("New OP", header=None)
+            if df_local.shape[1] >= 23 and df_share.shape[1] >= 23:
+                df_local.iloc[:, 22] = df_share.iloc[:, 22]  # Column W is index 22
+                df_updated_notes = df_local.copy()
+                st.success("Notes column W updated from SharePoint file.")
+            else:
+                st.error("Column W (23rd column) not found in one of the 'New OP' sheets.")
 
     # --- Process Outpatient Sheets ---
     required_sheets = ["New OP", "Routine", "MRN"]
     if all(sheet in xl.sheet_names for sheet in required_sheets):
-        df_newop = xl.parse("New OP")
-        df_routine = xl.parse("Routine").iloc[5:]  # from row 6
+        df_newop = xl.parse("New OP", header=None)
+        df_routine = xl.parse("Routine", header=None).iloc[5:]  # from row 6
         df_mrn_lookup = xl.parse("MRN")
 
         df_routine = df_routine[df_routine.dropna(how='all').index]
@@ -82,16 +85,22 @@ if uploaded_file:
         df_newop['color'] = 'black'
         df_merged = pd.concat([df_newop, df_routine], ignore_index=True)
 
-        for col in ['D', 'E', 'H']:
-            if col in df_merged.columns:
-                df_merged[col] = pd.to_datetime(df_merged[col], errors='coerce')
+        for col_idx in [3, 4, 7]:  # Columns D, E, H
+            if col_idx < df_merged.shape[1]:
+                df_merged.iloc[:, col_idx] = pd.to_datetime(df_merged.iloc[:, col_idx], errors='coerce')
 
-        df_merged.sort_values(by=['D', 'E'], inplace=True)
+        df_merged.sort_values(by=[3, 4], inplace=True)  # sort by D and E
         df_merged.drop_duplicates(subset=df_merged.columns[:26], inplace=True)
 
-        df_merged['X'] = df_merged['B'].map(df_mrn_lookup.set_index('A')['B'])
-        df_merged['Z'] = df_merged['B'].map(df_mrn_lookup.set_index('A')['F'])
-        df_merged['AA'] = df_merged['B'].map(df_mrn_lookup.set_index('A')['G'])
+        # Simulate VLOOKUPs (assumes columns A and B are index 0 and 1)
+        if 'A' in df_mrn_lookup.columns:
+            df_mrn_lookup = df_mrn_lookup.rename(columns=lambda x: str(x))
+        try:
+            df_merged[23] = df_merged[1].map(df_mrn_lookup.set_index(df_mrn_lookup.columns[0])[df_mrn_lookup.columns[1]])  # Column X
+            df_merged[25] = df_merged[1].map(df_mrn_lookup.set_index(df_mrn_lookup.columns[0])[df_mrn_lookup.columns[5]])  # Column Z
+            df_merged[26] = df_merged[1].map(df_mrn_lookup.set_index(df_mrn_lookup.columns[0])[df_mrn_lookup.columns[6]])  # Column AA
+        except Exception as e:
+            st.warning(f"Could not apply VLOOKUP-style mapping due to: {e}")
 
         df_processed_op = df_merged.copy()
         st.success("Outpatient data processed and merged with Routine.")
@@ -102,9 +111,9 @@ if uploaded_file:
             if df_combined is not None:
                 df_combined.to_excel(writer, index=False, sheet_name="MRN")
             if df_processed_op is not None:
-                df_processed_op.to_excel(writer, index=False, sheet_name="New OP")
+                df_processed_op.to_excel(writer, index=False, sheet_name="New OP", header=False)
             elif df_updated_notes is not None:
-                df_updated_notes.to_excel(writer, index=False, sheet_name="New OP")
+                df_updated_notes.to_excel(writer, index=False, sheet_name="New OP", header=False)
 
         with open("Combined_Processed_File.xlsx", "rb") as f:
             st.download_button("Download Combined Processed File", f, file_name="Combined_Processed_File.xlsx")
