@@ -56,7 +56,7 @@ def move_routine_to_newop(wb):
         for cell in row:
             cell.font = Font(color="000000")
 
-    # 2. All Routine A6:V in red (visual only, not moved yet)
+    # 2. All Routine A6:V in red
     max_row_routine = ws_routine.max_row
     for row in ws_routine.iter_rows(min_row=6, max_row=max_row_routine, min_col=1, max_col=22):
         for cell in row:
@@ -85,7 +85,8 @@ def move_routine_to_newop(wb):
     # 5. Read sheet to DataFrame including marker column
     data = []
     for row in ws_newop.iter_rows(values_only=True):
-        data.append(list(row[:marker_col]))  # includes marker col
+        # pad to at least marker_col columns
+        data.append(list(row) + [None]*(marker_col - len(row)))
     df = pd.DataFrame(data)
     # sort by D(3) then E(4) if enough columns
     if not df.empty and df.shape[0] > 1 and df.shape[1] >= marker_col:
@@ -124,14 +125,18 @@ def move_routine_to_newop(wb):
                 ws_newop.cell(row=row_idx, column=26).value = mrn_dict_country.get(str(col_b), "")
                 ws_newop.cell(row=row_idx, column=27).value = mrn_dict_firstres.get(str(col_b), "")
 
-    # 7. Re-apply red font for rows where marker is set
+    # 7. Re-apply red font for rows where marker is set, safely
     for row in ws_newop.iter_rows(min_row=1, max_row=ws_newop.max_row):
-        if row[marker_col - 1].value == "NEW":
+        if len(row) >= marker_col and row[marker_col - 1].value == "NEW":
             for cell in row[:27]:
                 cell.font = Font(color="FF0000")
             row[marker_col - 1].value = None  # clear marker
 
-    # 8. Clear Routine A6:V*
+    # 8. Ensure marker column is blanked for all rows (in case any stray marker remains)
+    for row_idx in range(1, ws_newop.max_row + 1):
+        ws_newop.cell(row=row_idx, column=marker_col, value=None)
+
+    # 9. Clear Routine A6:V*
     for row in ws_routine.iter_rows(min_row=6, max_row=max_row_routine, min_col=1, max_col=22):
         for cell in row:
             cell.value = None
