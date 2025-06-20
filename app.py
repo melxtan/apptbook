@@ -33,35 +33,38 @@ if uploaded_file:
             st.error("'MRN' sheet not found in the workbook.")
         else:
             df_existing = xl.parse("MRN")
-            existing_case_ids = df_existing['full_case_id'].astype(str).str.strip().dropna().unique().tolist()
-            new_records = []
-
-            for key in API_KEYS:
-                data = {
-                    'token': key,
-                    'content': 'record',
-                    'format': 'json',
-                    'type': 'flat',
-                    'rawOrLabel': 'label'
-                }
-                response = requests.post(REDCAP_URL, data=data)
-                if response.status_code == 200:
-                    records = response.json()
-                    for record in records:
-                        full_case_id = str(record.get("full_case_id", "")).strip()
-                        mrn = record.get("mrn", "")
-                        if mrn and full_case_id not in existing_case_ids:
-                            new_records.append(record)
-                else:
-                    st.error(f"Failed REDCap pull: {response.status_code}")
-
-            if new_records:
-                df_new = pd.DataFrame(new_records)
-                df_combined = pd.concat([df_existing, df_new], ignore_index=True).drop_duplicates(subset=["mrn", "case_id", "full_case_id"])
-                st.success(f"Imported {len(df_new)} new MRNs.")
-                st.download_button("Download Updated MRN Sheet", df_combined.to_excel(index=False), file_name="Updated_MRN.xlsx")
+            if "Full Case ID" not in df_existing.columns:
+                st.error("Column 'Full Case ID' is missing from the MRN sheet. Please check your file.")
             else:
-                st.info("No new MRNs found.")
+                existing_case_ids = df_existing['Full Case ID'].astype(str).str.strip().dropna().unique().tolist()
+                new_records = []
+
+                for key in API_KEYS:
+                    data = {
+                        'token': key,
+                        'content': 'record',
+                        'format': 'json',
+                        'type': 'flat',
+                        'rawOrLabel': 'label'
+                    }
+                    response = requests.post(REDCAP_URL, data=data)
+                    if response.status_code == 200:
+                        records = response.json()
+                        for record in records:
+                            full_case_id = str(record.get("full_case_id", "")).strip()
+                            mrn = record.get("mrn", "")
+                            if mrn and full_case_id not in existing_case_ids:
+                                new_records.append(record)
+                    else:
+                        st.error(f"Failed REDCap pull: {response.status_code}")
+
+                if new_records:
+                    df_new = pd.DataFrame(new_records)
+                    df_combined = pd.concat([df_existing, df_new], ignore_index=True).drop_duplicates(subset=["mrn", "case_id", "full_case_id"])
+                    st.success(f"Imported {len(df_new)} new MRNs.")
+                    st.download_button("Download Updated MRN Sheet", df_combined.to_excel(index=False), file_name="Updated_MRN.xlsx")
+                else:
+                    st.info("No new MRNs found.")
 
     elif task == "Process Outpatient Sheets":
         required_sheets = ["New OP", "Routine", "MRN"]
