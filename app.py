@@ -62,7 +62,10 @@ if uploaded_file:
                     df_new = pd.DataFrame(new_records)
                     df_combined = pd.concat([df_existing, df_new], ignore_index=True).drop_duplicates(subset=["mrn", "case_id", "full_case_id"])
                     st.success(f"Imported {len(df_new)} new MRNs.")
-                    st.download_button("Download Updated MRN Sheet", df_combined.to_excel(index=False), file_name="Updated_MRN.xlsx")
+                    with pd.ExcelWriter("Updated_MRN.xlsx") as writer:
+                        df_combined.to_excel(writer, index=False, sheet_name="MRN")
+                    with open("Updated_MRN.xlsx", "rb") as f:
+                        st.download_button("Download Updated MRN Sheet", f, file_name="Updated_MRN.xlsx")
                 else:
                     st.info("No new MRNs found.")
 
