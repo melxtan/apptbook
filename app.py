@@ -19,7 +19,6 @@ mrn_pwd = st.secrets["mrn_password"]
 op_pwd = st.secrets["op_password"]
 
 def parse_json_to_excel(json_data, ws_mrn):
-    # Find all existing full_case_id (I column, which is index 9 in openpyxl, 1-based)
     existing_case_ids = set()
     for row in ws_mrn.iter_rows(min_row=2, max_row=ws_mrn.max_row, min_col=9, max_col=9, values_only=True):
         if row[0]:
@@ -29,7 +28,6 @@ def parse_json_to_excel(json_data, ws_mrn):
     for record in json_data:
         incoming_case_id = str(record.get("full_case_id", "")).strip()
         if record.get("mrn") and incoming_case_id not in existing_case_ids:
-            # Write fields, using 1-based column indexing
             fields = [
                 "mrn", "case_id", "redcap_event_name", "redcap_repeat_instrument",
                 "redcap_repeat_instance", "country_origin", "first_responder",
@@ -44,7 +42,6 @@ def parse_json_to_excel(json_data, ws_mrn):
     return new_mrn_count
 
 def paste_csv_to_routine(ws_routine, csv_df):
-    # Paste starting from row 6, col 1 (A6)
     for row_idx, row in enumerate(csv_df.values, 6):
         for col_idx, val in enumerate(row, 1):
             ws_routine.cell(row=row_idx, column=col_idx, value=val)
@@ -59,22 +56,23 @@ def move_routine_to_newop(wb):
         for cell in row:
             cell.font = Font(color="000000")
 
-    # 2. All Routine A6:V in red
+    # 2. All Routine A6:V in red (visual only, not moved yet)
     max_row_routine = ws_routine.max_row
-    for row in ws_routine.iter_rows(min_row=6, max_row=max_row_routine, min_col=1, max_col=22): # A-V
+    for row in ws_routine.iter_rows(min_row=6, max_row=max_row_routine, min_col=1, max_col=22):
         for cell in row:
             cell.font = Font(color="FF0000")
 
-    # 3. Copy A6:V last to New OP last empty row
+    # 3. Copy A6:V last to New OP last empty row, and mark those as "NEW" in marker_col
     values = []
     for row in ws_routine.iter_rows(min_row=6, max_row=ws_routine.max_row, min_col=1, max_col=22, values_only=True):
         if any([cell is not None and str(cell).strip() != "" for cell in row]):
             values.append(row)
     insert_row = ws_newop.max_row + 1
+    marker_col = 28  # AB column, to track newly added rows
     for r, row in enumerate(values, insert_row):
         for c, val in enumerate(row, 1):
             ws_newop.cell(row=r, column=c, value=val)
-            ws_newop.cell(row=r, column=c).font = Font(color="FF0000")
+        ws_newop.cell(row=r, column=marker_col, value="NEW")  # set marker for red
 
     # 4. Set date & time formats for cols D (4), E (5), H (8)
     for cell in ws_newop[get_column_letter(4)]:
@@ -84,21 +82,26 @@ def move_routine_to_newop(wb):
     for cell in ws_newop[get_column_letter(8)]:
         cell.number_format = 'mm/dd/yyyy'
 
-    # 5. Sort by D then E
-    # This requires a temp DataFrame (assuming header in first row)
+    # 5. Read sheet to DataFrame including marker column
     data = []
     for row in ws_newop.iter_rows(values_only=True):
-        data.append(list(row))
+        data.append(list(row[:marker_col]))  # includes marker col
     df = pd.DataFrame(data)
-    if not df.empty and df.shape[0] > 1:
-        # sort by D(3) then E(4)
+    # sort by D(3) then E(4) if enough columns
+    if not df.empty and df.shape[0] > 1 and df.shape[1] >= marker_col:
         df_sorted = df.sort_values(by=[3, 4], ascending=[True, True])
+        # Remove duplicates on columns A:AA (0:26)
+        df_sorted = df_sorted.drop_duplicates(subset=list(range(27)))
+        # Write back to sheet
         for r_idx, row in enumerate(df_sorted.values.tolist(), 1):
             for c_idx, val in enumerate(row, 1):
                 ws_newop.cell(row=r_idx, column=c_idx, value=val)
+        # Clear extra rows after dedup
+        for row in ws_newop.iter_rows(min_row=len(df_sorted)+1, max_row=ws_newop.max_row):
+            for cell in row:
+                cell.value = None
 
-    # 6. Fill X (24), Z (26), AA (27) using MRN lookups
-    # We'll convert MRN sheet to DataFrame for fast lookups
+    # 6. VLOOKUPs: Fill X (24), Z (26), AA (27) using MRN lookups
     mrn_data = []
     for row in ws_mrn.iter_rows(values_only=True):
         mrn_data.append(row)
@@ -108,12 +111,10 @@ def move_routine_to_newop(wb):
     mrn_dict_firstres = {}
     if not mrn_df.empty and mrn_df.shape[1] >= 7:
         for idx, row in mrn_df.iterrows():
-            if pd.notnull(row[0]): # MRN
+            if pd.notnull(row[0]):
                 mrn_dict_case[str(row[0])] = row[1] if len(row) > 1 else ""
                 mrn_dict_country[str(row[0])] = row[5] if len(row) > 5 else ""
                 mrn_dict_firstres[str(row[0])] = row[6] if len(row) > 6 else ""
-
-    # For each cell in column X (24), starting from row 7
     for row_idx in range(7, ws_newop.max_row + 1):
         cell_x = ws_newop.cell(row=row_idx, column=24)
         if cell_x.value in [None, ""]:
@@ -123,16 +124,12 @@ def move_routine_to_newop(wb):
                 ws_newop.cell(row=row_idx, column=26).value = mrn_dict_country.get(str(col_b), "")
                 ws_newop.cell(row=row_idx, column=27).value = mrn_dict_firstres.get(str(col_b), "")
 
-    # 7. Remove duplicates A:AA (1:27), keep first row (header or otherwise)
-    df2 = pd.DataFrame([[cell.value for cell in row[:27]] for row in ws_newop.iter_rows()])
-    df2 = df2.drop_duplicates()
-    for i, row in enumerate(df2.values.tolist(), 1):
-        for j, val in enumerate(row, 1):
-            ws_newop.cell(row=i, column=j, value=val)
-    # Clear any extra rows after dedup
-    for row in ws_newop.iter_rows(min_row=len(df2)+1, max_row=ws_newop.max_row):
-        for cell in row:
-            cell.value = None
+    # 7. Re-apply red font for rows where marker is set
+    for row in ws_newop.iter_rows(min_row=1, max_row=ws_newop.max_row):
+        if row[marker_col - 1].value == "NEW":
+            for cell in row[:27]:
+                cell.font = Font(color="FF0000")
+            row[marker_col - 1].value = None  # clear marker
 
     # 8. Clear Routine A6:V*
     for row in ws_routine.iter_rows(min_row=6, max_row=max_row_routine, min_col=1, max_col=22):
@@ -140,7 +137,6 @@ def move_routine_to_newop(wb):
             cell.value = None
 
 if csv_file and excel_file:
-    # Load files
     csv_df = pd.read_csv(csv_file)
     excel_bytes = BytesIO(excel_file.read())
     wb = load_workbook(excel_bytes)
@@ -174,7 +170,7 @@ if csv_file and excel_file:
 
     if st.button("Run Outpatient Routine Process"):
         move_routine_to_newop(wb)
-        st.success("Routine → New OP processing done.")
+        st.success("Routine → New OP processing done. Newly moved rows are highlighted in red.")
 
     output = BytesIO()
     wb.save(output)
@@ -185,7 +181,7 @@ if csv_file and excel_file:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
-    st.info("Remember: You can now upload this Excel to SharePoint as needed.")
+    st.info("You can now upload this Excel to SharePoint if needed.")
 
 else:
     st.info("Please upload both the CSV and Excel files to begin.")
