@@ -3,8 +3,9 @@ import pandas as pd
 import requests
 from openpyxl import load_workbook
 from openpyxl.styles import Font
+from openpyxl.utils import get_column_letter
 from io import BytesIO
-from dateutil import parser
+from datetime import datetime, timedelta
 
 st.set_page_config(layout="wide")
 st.title("Automated REDCap & Excel Workflow")
@@ -14,17 +15,35 @@ excel_file = st.file_uploader("Upload Excel File (.xlsx)", type=["xlsx"])
 api_keys = [st.secrets["redcap_api_1"], st.secrets["redcap_api_2"]]
 
 def parse_excel_date(val):
-    """Try to parse any value to a date, else return original."""
+    """Convert Excel serial or string into datetime or return original if not parseable."""
     if val is None or val == "":
         return None
-    if isinstance(val, (pd.Timestamp, )):
-        return val.to_pydatetime()
-    if isinstance(val, str):
+
+    # Excel date serial number (assuming 1900 date system)
+    if isinstance(val, (int, float)):
+        # Excel's day 1 is 1899-12-31, but due to leap year bug, we subtract 2
+        return datetime(1899, 12, 30) + timedelta(days=float(val))
+
+    # If it's already a datetime object
+    if isinstance(val, datetime):
+        return val
+
+    # Try parsing common date/time string formats
+    str_val = str(val).strip()
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d-%b-%Y", "%Y/%m/%d", "%m/%d/%y", "%Y-%m-%d %H:%M:%S"):
         try:
-            dt = parser.parse(val)
-            return dt
-        except Exception:
-            return val
+            return datetime.strptime(str_val, fmt)
+        except ValueError:
+            continue
+
+    # Fallback: try pandas parser if available (optional)
+    try:
+        import pandas as pd
+        return pd.to_datetime(str_val, errors='coerce')
+    except:
+        pass
+
+    # If all parsing fails, return original
     return val
 
 def parse_json_to_excel(json_data, ws_mrn):
@@ -55,95 +74,106 @@ def move_routine_to_newop(wb):
     ws_newop = wb["New OP"]
     ws_mrn = wb["MRN"]
 
-    # 1. Get all Routine data from A6:V*
+    # [Unprotect "New OP"] - Cannot actually enforce with openpyxl, so comment for parity
+    # ws_newop.protection.sheet = False  # only works in GUI
+
+    # 1. Change all text in "New OP" to black
+    for row in ws_newop.iter_rows():
+        for cell in row:
+            cell.font = Font(color="000000")
+
+    # 2. Get all Routine data from A6:V*
     data_rows = []
-    mrn_set = set()
     for i in range(6, ws_routine.max_row + 1):
         row_vals = [ws_routine.cell(row=i, column=c).value for c in range(1, 23)]
-        if any([v is not None and str(v).strip() != "" for v in row_vals]):
+        if any(v not in [None, ""] for v in row_vals):
             data_rows.append(row_vals)
-            if row_vals[0]:
-                mrn_set.add(str(row_vals[0]))
 
     if not data_rows:
+        print("No new data found in 'Routine'.")
         return 0
 
-    # 2. Copy new rows to New OP at the bottom, D and H as parsed dates
+    # 3. Copy new rows to "New OP" and format
     insert_row = ws_newop.max_row + 1
-    for r, row in enumerate(data_rows, insert_row):
+    copied_mrns = set()
+    for r_idx, row in enumerate(data_rows, insert_row):
         for c, val in enumerate(row, 1):
-            if c in [4, 8]:  # D or H
-                cell_value = parse_excel_date(val)
-            else:
-                cell_value = val
-            ws_newop.cell(row=r, column=c, value=cell_value)
+            cell_value = parse_excel_date(val) if c in [4, 8] else val
+            cell = ws_newop.cell(row=r_idx, column=c, value=cell_value)
+            cell.font = Font(color="FF0000")  # red font for new rows
+        if row[0]:
+            copied_mrns.add(str(row[0]))
 
-    # 3. Set date & time formats for cols D (4), E (5), H (8)
-    for cell in ws_newop['D']:
-        cell.number_format = 'mm/dd/yyyy'
-    for cell in ws_newop['E']:
-        cell.number_format = 'hh:mm'
-    for cell in ws_newop['H']:
-        cell.number_format = 'mm/dd/yyyy'
+    # 4. Set formats for columns D, E, H
+    for col_letter in ["D", "E", "H"]:
+        for cell in ws_newop[col_letter]:
+            if col_letter == "D" or col_letter == "H":
+                cell.number_format = "mm/dd/yyyy"
+            elif col_letter == "E":
+                cell.number_format = "hh:mm"
 
-    # 4. Deduplicate: treat first row as header, dedup A:AA (columns 1-27)
+    # 5. Deduplicate on A:AA (columns 1–27)
     all_data = []
     for row in ws_newop.iter_rows(values_only=True):
         all_data.append(list(row) + [None]*(27 - len(row)))
-    if len(all_data) < 2:
-        return 0
 
     header = all_data[0]
     data = all_data[1:]
     df = pd.DataFrame(data)
-    df_dedup = df.drop_duplicates(subset=list(range(27)), keep='first')
+    df_dedup = df.drop_duplicates(subset=list(range(26)), keep='first')
+
     ws_newop.delete_rows(2, ws_newop.max_row - 1)
     for i, row in enumerate(df_dedup.values.tolist(), 2):
         for j, val in enumerate(row, 1):
-            # Convert to date for D/H
-            if j in [4, 8]:
-                cell_value = parse_excel_date(val)
-            else:
-                cell_value = val
-            ws_newop.cell(row=i, column=j, value=cell_value)
+            cell = ws_newop.cell(row=i, column=j)
+            cell.value = parse_excel_date(val) if j in [4, 8] else val
+            # Reset font to black first
+            cell.font = Font(color="000000")
+            # Re-apply red if MRN is in copied set
+            if j == 1 and val and str(val) in copied_mrns:
+                for c in range(1, 28):
+                    ws_newop.cell(row=i, column=c).font = Font(color="FF0000")
 
-    # 5. VLOOKUPs: Fill X (24), Z (26), AA (27) using MRN lookups
-    mrn_data = []
-    for row in ws_mrn.iter_rows(values_only=True):
-        mrn_data.append(row)
-    mrn_df = pd.DataFrame(mrn_data)
+    # 6. Sort by D then E
+    df_sorted = df_dedup.sort_values(by=[3, 4])  # Columns D and E are index 3, 4 (0-based)
+    ws_newop.delete_rows(2, ws_newop.max_row - 1)
+    for i, row in enumerate(df_sorted.values.tolist(), 2):
+        for j, val in enumerate(row, 1):
+            cell = ws_newop.cell(row=i, column=j)
+            cell.value = parse_excel_date(val) if j in [4, 8] else val
+
+    # 7. VLOOKUP-like fill for X, Z, AA (cols 24, 26, 27)
+    mrn_data = pd.DataFrame(ws_mrn.values)
     mrn_dict_case = {}
     mrn_dict_country = {}
     mrn_dict_firstres = {}
-    if not mrn_df.empty and mrn_df.shape[1] >= 7:
-        for idx, row in mrn_df.iterrows():
-            if pd.notnull(row[0]):
-                mrn_dict_case[str(row[0])] = row[1] if len(row) > 1 else ""
-                mrn_dict_country[str(row[0])] = row[5] if len(row) > 5 else ""
-                mrn_dict_firstres[str(row[0])] = row[6] if len(row) > 6 else ""
+
+    for idx, row in mrn_data.iterrows():
+        if pd.notnull(row[0]):
+            mrn = str(row[0])
+            mrn_dict_case[mrn] = row[1] if len(row) > 1 else ""
+            mrn_dict_country[mrn] = row[5] if len(row) > 5 else ""
+            mrn_dict_firstres[mrn] = row[6] if len(row) > 6 else ""
+
     for row_idx in range(7, ws_newop.max_row + 1):
-        cell_x = ws_newop.cell(row=row_idx, column=24)
-        if cell_x.value in [None, ""]:
-            col_b = ws_newop.cell(row=row_idx, column=2).value  # B
-            if col_b and str(col_b) in mrn_dict_case:
-                cell_x.value = mrn_dict_case.get(str(col_b), "")
-                ws_newop.cell(row=row_idx, column=26).value = mrn_dict_country.get(str(col_b), "")
-                ws_newop.cell(row=row_idx, column=27).value = mrn_dict_firstres.get(str(col_b), "")
+        col_b = ws_newop.cell(row=row_idx, column=2).value
+        if col_b:
+            key = str(col_b)
+            if key in mrn_dict_case:
+                ws_newop.cell(row=row_idx, column=24).value = mrn_dict_case[key]
+                ws_newop.cell(row=row_idx, column=26).value = mrn_dict_country.get(key, "")
+                ws_newop.cell(row=row_idx, column=27).value = mrn_dict_firstres.get(key, "")
 
-    # 6. Mark in red only the new rows (from current Routine), that survived dedup
-    red_count = 0
-    for row in ws_newop.iter_rows(min_row=2, max_row=ws_newop.max_row):
-        if row[0].value and str(row[0].value) in mrn_set:
-            for cell in row[:27]:
-                cell.font = Font(color="FF0000")
-            red_count += 1
-
-    # 7. Clear Routine A6:V*
+    # 8. Clear Routine!A6:V*
     for i in range(6, ws_routine.max_row + 1):
         for c in range(1, 23):
             ws_routine.cell(row=i, column=c).value = None
 
-    return red_count
+    # [Re-protect "New OP"] - simulation only
+    # ws_newop.protection.sheet = True
+
+    print("Process completed successfully.")
+    return len(data_rows)
 
 if excel_file:
     excel_bytes = BytesIO(excel_file.read())
