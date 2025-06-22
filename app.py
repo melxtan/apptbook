@@ -74,9 +74,6 @@ def move_routine_to_newop(wb):
     ws_newop = wb["New OP"]
     ws_mrn = wb["MRN"]
 
-    # [Unprotect "New OP"] - Cannot actually enforce with openpyxl, so comment for parity
-    # ws_newop.protection.sheet = False  # only works in GUI
-
     # 1. Change all text in "New OP" to black
     for row in ws_newop.iter_rows():
         for cell in row:
@@ -93,49 +90,42 @@ def move_routine_to_newop(wb):
         print("No new data found in 'Routine'.")
         return 0
 
-    # 3. Copy new rows to "New OP" and format
+    # 3. Copy new rows to "New OP" and mark as new
     insert_row = ws_newop.max_row + 1
-    copied_mrns = set()
     for r_idx, row in enumerate(data_rows, insert_row):
         for c, val in enumerate(row, 1):
             cell_value = parse_excel_date(val) if c in [4, 8] else val
-            cell = ws_newop.cell(row=r_idx, column=c, value=cell_value)
-            cell.font = Font(color="FF0000")  # red font for new rows
-        if row[0]:
-            copied_mrns.add(str(row[0]))
+            ws_newop.cell(row=r_idx, column=c, value=cell_value)
+        ws_newop.cell(row=r_idx, column=28, value="Yes")  # Column AB → is_new = Yes
 
     # 4. Set formats for columns D, E, H
     for col_letter in ["D", "E", "H"]:
         for cell in ws_newop[col_letter]:
-            if col_letter == "D" or col_letter == "H":
+            if col_letter in ["D", "H"]:
                 cell.number_format = "mm/dd/yyyy"
             elif col_letter == "E":
                 cell.number_format = "hh:mm"
 
-    # 5. Deduplicate on A:AA (columns 1–27)
+    # 5. Deduplicate all rows, but exclude "is_new" (col 28) from deduplication key
     all_data = []
     for row in ws_newop.iter_rows(values_only=True):
-        all_data.append(list(row) + [None]*(27 - len(row)))
+        all_data.append(list(row) + [None] * (28 - len(row)))  # Ensure 28 columns
 
     header = all_data[0]
     data = all_data[1:]
     df = pd.DataFrame(data)
-    df_dedup = df.drop_duplicates(subset=list(range(26)), keep='first')
+
+    df_dedup = df.drop_duplicates(subset=list(range(27)), keep='first')
 
     ws_newop.delete_rows(2, ws_newop.max_row - 1)
     for i, row in enumerate(df_dedup.values.tolist(), 2):
         for j, val in enumerate(row, 1):
             cell = ws_newop.cell(row=i, column=j)
             cell.value = parse_excel_date(val) if j in [4, 8] else val
-            # Reset font to black first
-            cell.font = Font(color="000000")
-            # Re-apply red if MRN is in copied set
-            if j == 1 and val and str(val) in copied_mrns:
-                for c in range(1, 28):
-                    ws_newop.cell(row=i, column=c).font = Font(color="FF0000")
 
-    # 6. Sort by D then E
-    df_sorted = df_dedup.sort_values(by=[3, 4])  # Columns D and E are index 3, 4 (0-based)
+    # 6. Sort by D then E (columns 4 and 5, 0-based index 3 and 4)
+    df_sorted = df_dedup.sort_values(by=[3, 4], na_position='last')
+
     ws_newop.delete_rows(2, ws_newop.max_row - 1)
     for i, row in enumerate(df_sorted.values.tolist(), 2):
         for j, val in enumerate(row, 1):
@@ -169,8 +159,9 @@ def move_routine_to_newop(wb):
         for c in range(1, 23):
             ws_routine.cell(row=i, column=c).value = None
 
-    # [Re-protect "New OP"] - simulation only
-    # ws_newop.protection.sheet = True
+    # 9. (Optional) Set header for "is_new" column if it doesn't exist
+    if ws_newop.cell(row=1, column=28).value is None:
+        ws_newop.cell(row=1, column=28).value = "is_new"
 
     print("Process completed successfully.")
     return len(data_rows)
