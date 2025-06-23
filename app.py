@@ -2,57 +2,48 @@ import streamlit as st
 import pandas as pd
 import requests
 from openpyxl import load_workbook
-from office365.sharepoint.client_context import ClientContext
-from office365.runtime.auth.user_credential import UserCredential
+from openpyxl.styles import Font
+from openpyxl.utils import get_column_letter
 from io import BytesIO
 from datetime import datetime, timedelta
 
 st.set_page_config(layout="wide")
-st.title("Automated REDCap & Excel Workflow with SharePoint Integration")
+st.title("Automated REDCap & Excel Workflow")
 
-SHAREPOINT_URL = "https://keckmedicine.sharepoint.com/sites/InternationalProgram&TeleCAREDepartment"
-SHAREPOINT_FILE = "/sites/InternationalProgram&TeleCAREDepartment/Shared Documents/General/Operation/Apptbook 6.20.25.xlsx"
+excel_file = st.file_uploader("Upload Excel File (.xlsx)", type=["xlsx"])
 
-username = st.secrets["sharepoint_username"]
-password = st.secrets["sharepoint_password"]
 api_keys = [st.secrets["redcap_api_1"], st.secrets["redcap_api_2"]]
 
-def get_sharepoint_excel():
-    ctx = ClientContext(SHAREPOINT_URL).with_credentials(UserCredential(username, password))
-    file_obj = BytesIO()
-    ctx.web.get_file_by_server_relative_url(SHAREPOINT_FILE).download(file_obj).execute_query()
-    file_obj.seek(0)
-    return file_obj
-
-def upload_sharepoint_excel(wb):
-    output = BytesIO()
-    wb.save(output)
-    output.seek(0)
-    target_folder_url = "/sites/InternationalProgram&TeleCAREDepartment/Shared Documents/General/Operation"
-    ctx = ClientContext(SHAREPOINT_URL).with_credentials(UserCredential(username, password))
-    ctx.web.get_folder_by_server_relative_url(target_folder_url)\
-        .upload_file("Apptbook 6.20.25.xlsx", output.read())\
-        .execute_query()
-    return True
-
 def parse_excel_date(val):
-    # ... (your function unchanged)
+    """Convert Excel serial or string into datetime or return original if not parseable."""
     if val is None or val == "":
         return None
+
+    # Excel date serial number (assuming 1900 date system)
     if isinstance(val, (int, float)):
+        # Excel's day 1 is 1899-12-31, but due to leap year bug, we subtract 2
         return datetime(1899, 12, 30) + timedelta(days=float(val))
+
+    # If it's already a datetime object
     if isinstance(val, datetime):
         return val
+
+    # Try parsing common date/time string formats
     str_val = str(val).strip()
     for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d-%b-%Y", "%Y/%m/%d", "%m/%d/%y", "%Y-%m-%d %H:%M:%S"):
         try:
             return datetime.strptime(str_val, fmt)
         except ValueError:
             continue
+
+    # Fallback: try pandas parser if available (optional)
     try:
+        import pandas as pd
         return pd.to_datetime(str_val, errors='coerce')
     except:
         pass
+
+    # If all parsing fails, return original
     return val
 
 def parse_json_to_excel(json_data, ws_mrn):
@@ -83,12 +74,12 @@ def move_routine_to_newop(wb):
     ws_newop = wb["New OP"]
     ws_mrn = wb["MRN"]
 
-    # 1. Reset font color in "New OP"
+    # 1. Change all text in "New OP" to black
     for row in ws_newop.iter_rows():
         for cell in row:
             cell.font = Font(color="000000")
 
-    # 2. Read data from Routine!A6:V*
+    # 2. Get all Routine data from A6:V*
     data_rows = []
     for i in range(6, ws_routine.max_row + 1):
         row_vals = [ws_routine.cell(row=i, column=c).value for c in range(1, 23)]
@@ -99,14 +90,15 @@ def move_routine_to_newop(wb):
         print("No new data found in 'Routine'.")
         return 0
 
-    # 3. Copy new rows to New OP and mark as "Yes" in column 28 (AB)
+    # 3. Copy new rows to "New OP" and mark as new
     insert_row = ws_newop.max_row + 1
     for r_idx, row in enumerate(data_rows, insert_row):
         for c, val in enumerate(row, 1):
-            ws_newop.cell(row=r_idx, column=c, value=parse_excel_date(val) if c in [4, 8] else val)
-        ws_newop.cell(row=r_idx, column=28, value="Yes")
+            cell_value = parse_excel_date(val) if c in [4, 8] else val
+            ws_newop.cell(row=r_idx, column=c, value=cell_value)
+        ws_newop.cell(row=r_idx, column=28, value="Yes")  # Column AB → is_new = Yes
 
-    # 4. Set number formats for columns D, E, H
+    # 4. Set formats for columns D, E, H
     for col_letter in ["D", "E", "H"]:
         for cell in ws_newop[col_letter]:
             if col_letter in ["D", "H"]:
@@ -114,10 +106,10 @@ def move_routine_to_newop(wb):
             elif col_letter == "E":
                 cell.number_format = "hh:mm"
 
-    # 5. Convert New OP to DataFrame and deduplicate (exclude is_new column)
+    # 5. Deduplicate all rows, but exclude "is_new" (col 28) from deduplication key
     all_data = []
     for row in ws_newop.iter_rows(values_only=True):
-        all_data.append(list(row) + [None] * (28 - len(row)))  # Ensure 28 cols
+        all_data.append(list(row) + [None] * (28 - len(row)))  # Ensure 28 columns
 
     header = all_data[0]
     data = all_data[1:]
@@ -125,23 +117,22 @@ def move_routine_to_newop(wb):
 
     df_dedup = df.drop_duplicates(subset=list(range(27)), keep='first')
 
-    # 6. Sort by column D (index 3) then E (index 4)
-    df_sorted = df_dedup.sort_values(by=[3, 4], na_position='last')
-
-    # 7. Write sorted data back to New OP and apply red font where is_new == "Yes"
     ws_newop.delete_rows(2, ws_newop.max_row - 1)
-    for i, row in enumerate(df_sorted.values.tolist(), 2):
-        is_new = str(row[27]).strip().lower() == "yes"
+    for i, row in enumerate(df_dedup.values.tolist(), 2):
         for j, val in enumerate(row, 1):
             cell = ws_newop.cell(row=i, column=j)
             cell.value = parse_excel_date(val) if j in [4, 8] else val
-            if is_new:
-                cell.font = Font(color="FF0000")  # red font
 
-    # 8. Delete the "is_new" column (AB / index 28)
-    ws_newop.delete_cols(28)
+    # 6. Sort by D then E (columns 4 and 5, 0-based index 3 and 4)
+    df_sorted = df_dedup.sort_values(by=[3, 4], na_position='last')
 
-    # 9. VLOOKUP-like fill for X (24), Z (26), AA (27)
+    ws_newop.delete_rows(2, ws_newop.max_row - 1)
+    for i, row in enumerate(df_sorted.values.tolist(), 2):
+        for j, val in enumerate(row, 1):
+            cell = ws_newop.cell(row=i, column=j)
+            cell.value = parse_excel_date(val) if j in [4, 8] else val
+
+    # 7. VLOOKUP-like fill for X, Z, AA (cols 24, 26, 27)
     mrn_data = pd.DataFrame(ws_mrn.values)
     mrn_dict_case = {}
     mrn_dict_country = {}
@@ -155,31 +146,28 @@ def move_routine_to_newop(wb):
             mrn_dict_firstres[mrn] = row[6] if len(row) > 6 else ""
 
     for row_idx in range(7, ws_newop.max_row + 1):
-        mrn_val = ws_newop.cell(row=row_idx, column=2).value
-        if mrn_val:
-            key = str(mrn_val)
+        col_b = ws_newop.cell(row=row_idx, column=2).value
+        if col_b:
+            key = str(col_b)
             if key in mrn_dict_case:
                 ws_newop.cell(row=row_idx, column=24).value = mrn_dict_case[key]
                 ws_newop.cell(row=row_idx, column=26).value = mrn_dict_country.get(key, "")
                 ws_newop.cell(row=row_idx, column=27).value = mrn_dict_firstres.get(key, "")
 
-    # 10. Clear Routine!A6:V*
+    # 8. Clear Routine!A6:V*
     for i in range(6, ws_routine.max_row + 1):
         for c in range(1, 23):
             ws_routine.cell(row=i, column=c).value = None
 
+    # 9. (Optional) Set header for "is_new" column if it doesn't exist
+    if ws_newop.cell(row=1, column=28).value is None:
+        ws_newop.cell(row=1, column=28).value = "is_new"
+
     print("Process completed successfully.")
     return len(data_rows)
 
-st.subheader("1. Download latest Excel from SharePoint")
-
-if st.button("Download from SharePoint"):
-    excel_bytes = get_sharepoint_excel()
-    st.session_state["excel_bytes"] = excel_bytes
-    st.success("Downloaded latest Excel from SharePoint!")
-
-if "excel_bytes" in st.session_state:
-    excel_bytes = st.session_state["excel_bytes"]
+if excel_file:
+    excel_bytes = BytesIO(excel_file.read())
     wb = load_workbook(excel_bytes)
 
     if st.button("Refresh MRN sheet from REDCap (API)"):
@@ -206,7 +194,6 @@ if "excel_bytes" in st.session_state:
         red_count = move_routine_to_newop(wb)
         st.success(f"Routine → New OP processing done. {red_count} newly unique records highlighted in red.")
 
-    # Download processed file for local review
     output = BytesIO()
     wb.save(output)
     st.download_button(
@@ -216,10 +203,7 @@ if "excel_bytes" in st.session_state:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
-    st.subheader("2. Upload processed Excel back to SharePoint")
-    if st.button("Upload to SharePoint"):
-        upload_sharepoint_excel(wb)
-        st.success("Processed file uploaded back to SharePoint!")
+    st.info("You can now upload this Excel to SharePoint if needed.")
 
 else:
-    st.info("Click 'Download from SharePoint' to start.")
+    st.info("Please upload your Excel file (with CSV data already pasted into Routine tab, A6).")
