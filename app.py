@@ -97,9 +97,9 @@ def parse_json_to_excel(json_data, ws_mrn):
 
 def deduplicate_mrn_by_case_id_and_today(ws_mrn):
     """
-    Deduplicate ws_mrn by 'Full Case ID' (col I/8), 
-    keeping the row with the latest 'today' (col R/17).
-    Writes the deduped rows back to ws_mrn (keeps headers).
+    Deduplicate ws_mrn by 'Case ID' (column B), 
+    keeping the row with the latest 'today' (column R).
+    Writes deduped rows back to ws_mrn (keeps headers).
     """
     import pandas as pd
 
@@ -111,20 +111,20 @@ def deduplicate_mrn_by_case_id_and_today(ws_mrn):
 
     header, *data = rows
     df = pd.DataFrame(data, columns=header)
-    
-    # Ensure columns exist
-    if "Full Case ID" not in df.columns or "today" not in df.columns:
-        print("Columns 'Full Case ID' or 'today' not found in MRN sheet.")
+
+    # Check required columns exist
+    if "Case ID" not in df.columns or "today" not in df.columns:
+        print("Columns 'Case ID' or 'today' not found in MRN sheet.")
         return 0
 
-    # Parse 'today' as datetime (if not already)
+    # Parse 'today' as datetime for proper sorting
     df["today"] = pd.to_datetime(df["today"], errors="coerce")
 
-    # Sort by 'Full Case ID' then 'today' (so last is latest)
-    df = df.sort_values(by=["Full Case ID", "today"], ascending=[True, True])
+    # Sort by 'Case ID' then 'today' ascending (so last is most recent per group)
+    df = df.sort_values(by=["Case ID", "today"], ascending=[True, True])
 
-    # Deduplicate: keep last within each "Full Case ID"
-    df_dedup = df.drop_duplicates(subset=["Full Case ID"], keep="last")
+    # Deduplicate: keep last (latest 'today') for each Case ID
+    df_dedup = df.drop_duplicates(subset=["Case ID"], keep="last")
 
     # Write back (overwrite all data except header)
     ws_mrn.delete_rows(2, ws_mrn.max_row - 1)  # Remove all but header
