@@ -221,4 +221,4 @@ if "excel_bytes" in st.session_state:
         st.success("Processed file uploaded back to SharePoint!")
 
 else:
-    st.info("Click 'Download from SharePoint' to start. Or, upload Excel manually below:")
+    st.info("Click 'Download from SharePoint' to start.")
