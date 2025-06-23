@@ -145,7 +145,10 @@ def move_routine_to_newop(wb):
     data = all_data[1:]
     df = pd.DataFrame(data)
 
-    dedup_indices = [i for i in range(27) if i != 17]  # Exclude column R (18th col, index 17)
+    dedup_indices = [i for i in range(27) if i != 17]
+    df = df.fillna("")
+    for col in dedup_indices:
+        df[col] = df[col].apply(lambda x: str(x).strip())
     df_dedup = df.drop_duplicates(subset=dedup_indices, keep='first')
 
     # 6. Ensure columns D (3) and E (4) are correct types for sorting
