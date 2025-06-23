@@ -5,7 +5,7 @@ from openpyxl import load_workbook
 from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 from io import BytesIO
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 
 st.set_page_config(layout="wide")
 st.title("Automated REDCap & Excel Workflow")
@@ -15,9 +15,6 @@ excel_file = st.file_uploader("Upload Excel File (.xlsx)", type=["xlsx"])
 api_keys = [st.secrets["redcap_api_1"], st.secrets["redcap_api_2"]]
 
 def parse_excel_date(val, force_date_only=False):
-    """Convert Excel serial or string into datetime or return original if not parseable.
-    If force_date_only, strip time parts and ensure year is correct for two-digit years.
-    """
     if val is None or val == "":
         return None
 
@@ -26,37 +23,54 @@ def parse_excel_date(val, force_date_only=False):
         dt = datetime(1899, 12, 30) + timedelta(days=float(val))
         return dt.date() if force_date_only else dt
 
-    # If it's already a datetime object
     if isinstance(val, datetime):
         return val.date() if force_date_only else val
 
-    # Try parsing common date/time string formats
     str_val = str(val).strip()
     for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d-%b-%Y", "%Y/%m/%d", "%m/%d/%y", "%Y-%m-%d %H:%M:%S"):
         try:
             dt = datetime.strptime(str_val, fmt)
-            # For two-digit year: if parsed year is > (this year + 1), treat as 1900s
             if fmt == "%m/%d/%y" and dt.year > datetime.now().year + 1:
                 dt = dt.replace(year=dt.year - 100)
             return dt.date() if force_date_only else dt
         except ValueError:
             continue
 
-    # Fallback: try pandas parser if available (optional)
     try:
-        import pandas as pd
         dt = pd.to_datetime(str_val, errors='coerce')
         if pd.isnull(dt):
             return val
-        # pandas handles two-digit years as 2000s by default, so correct if necessary
         if dt.year > datetime.now().year + 1 and len(str_val.split('/')[-1]) == 2:
             dt = dt.replace(year=dt.year - 100)
         return dt.date() if force_date_only else dt
     except:
         pass
 
-    # If all parsing fails, return original
     return val
+
+def parse_to_time(val):
+    """Parse value to a datetime.time object or None."""
+    if val is None or val == "" or pd.isnull(val):
+        return None
+    if isinstance(val, time):
+        return val
+    if isinstance(val, datetime):
+        return val.time()
+    if isinstance(val, timedelta):
+        dummy = (datetime(1900, 1, 1) + val)
+        return dummy.time()
+    if isinstance(val, (float, int)):
+        # Excel time as fraction of day
+        t = (datetime(1899, 12, 30) + timedelta(days=float(val))).time()
+        return t
+    if isinstance(val, str):
+        s = val.strip()
+        for fmt in ("%H:%M", "%I:%M %p", "%H:%M:%S"):
+            try:
+                return datetime.strptime(s, fmt).time()
+            except Exception:
+                continue
+    return None
 
 def parse_json_to_excel(json_data, ws_mrn):
     existing_case_ids = set()
@@ -106,10 +120,8 @@ def move_routine_to_newop(wb):
     insert_row = ws_newop.max_row + 1
     for r_idx, row in enumerate(data_rows, insert_row):
         for c, val in enumerate(row, 1):
-            # If writing to column D (4), force date only and fix 19xx/20xx
             if c == 4:
                 ws_newop.cell(row=r_idx, column=c, value=parse_excel_date(val, force_date_only=True))
-            # If writing to column H (8), parse as date/datetime
             elif c == 8:
                 ws_newop.cell(row=r_idx, column=c, value=parse_excel_date(val))
             else:
@@ -136,26 +148,10 @@ def move_routine_to_newop(wb):
     df_dedup = df.drop_duplicates(subset=list(range(27)), keep='first')
 
     # 6. Ensure columns D (3) and E (4) are correct types for sorting
-    
     df_dedup[3] = pd.to_datetime(df_dedup[3], errors='coerce')
-    
-    def parse_to_time(val):
-        if pd.isnull(val) or val == "":
-            return None
-        if isinstance(val, datetime):
-            return val.time()
-        if isinstance(val, str):
-            for fmt in ("%H:%M", "%I:%M %p", "%H:%M:%S"):
-                try:
-                    return datetime.strptime(val.strip(), fmt).time()
-                except Exception:
-                    continue
-        return None
-    
     df_dedup[4] = df_dedup[4].apply(parse_to_time)
-    
-    df_sorted = df_dedup.sort_values(by=[3, 4], na_position='last')
 
+    df_sorted = df_dedup.sort_values(by=[3, 4], na_position='last')
 
     # 7. Write sorted data back to New OP and apply red font where is_new == "Yes"
     ws_newop.delete_rows(2, ws_newop.max_row - 1)
@@ -163,13 +159,14 @@ def move_routine_to_newop(wb):
         is_new = str(row[27]).strip().lower() == "yes"
         for j, val in enumerate(row, 1):
             cell = ws_newop.cell(row=i, column=j)
-            if j == 4:
+            if j == 4:  # D: date
                 cell.value = parse_excel_date(val, force_date_only=True)
                 cell.number_format = "mm/dd/yyyy"
-            elif j == 5:
-                cell.value = val if (val is None or isinstance(val, str)) else val.strftime("%H:%M")
+            elif j == 5:  # E: time
+                tval = parse_to_time(val)
+                cell.value = tval
                 cell.number_format = "hh:mm"
-            elif j == 8:
+            elif j == 8:  # H: date
                 cell.value = parse_excel_date(val)
                 cell.number_format = "mm/dd/yyyy"
             else:
