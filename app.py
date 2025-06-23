@@ -135,7 +135,11 @@ def move_routine_to_newop(wb):
 
     df_dedup = df.drop_duplicates(subset=list(range(27)), keep='first')
 
-    # 6. Sort by column D (index 3) then E (index 4)
+    # 6. Ensure columns D and E are both pd.Timestamp (datetime64)
+    for col in [3, 4]:
+        df_dedup[col] = pd.to_datetime(df_dedup[col], errors='coerce')
+    
+    # Now safe to sort
     df_sorted = df_dedup.sort_values(by=[3, 4], na_position='last')
 
     # 7. Write sorted data back to New OP and apply red font where is_new == "Yes"
