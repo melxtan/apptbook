@@ -222,10 +222,3 @@ if "excel_bytes" in st.session_state:
 
 else:
     st.info("Click 'Download from SharePoint' to start. Or, upload Excel manually below:")
-
-    # Optionally, still allow manual upload
-    excel_file = st.file_uploader("Upload Excel File (.xlsx)", type=["xlsx"])
-    if excel_file:
-        excel_bytes = BytesIO(excel_file.read())
-        st.session_state["excel_bytes"] = excel_bytes
-        st.success("File uploaded. You may now run processes.")
