@@ -149,11 +149,27 @@ def move_routine_to_newop(wb):
     date_indices = [3, 7]  # D and H
     
     df = df.fillna("")
+    
+    # FIXED: Normalize data types consistently BEFORE deduplication
     for col in dedup_indices:
-        if col not in date_indices:
-            df[col] = df[col].apply(lambda x: str(x).strip() if x is not None else x)
+        if col not in date_indices and col != 4:  # Skip date columns and time column
+            # Convert everything to string and normalize
+            df[col] = df[col].apply(lambda x: str(x).strip() if x is not None and x != "" else "")
+        elif col in date_indices:
+            # Normalize dates
+            df[col] = pd.to_datetime(df[col], errors='coerce')
+    
+    # Normalize times in column E (index 4)
+    if 4 in dedup_indices:
+        df[4] = df[4].apply(parse_to_time)
+    
+    # Debug output (remove in production if desired)
+    print(f"Before deduplication: {len(df)} rows")
     
     df_dedup = df.drop_duplicates(subset=dedup_indices, keep='first')
+    
+    print(f"After deduplication: {len(df_dedup)} rows")
+    print(f"Removed {len(df) - len(df_dedup)} duplicate rows")
 
     # 6. Ensure columns D (3) and E (4) are correct types for sorting
     df_dedup[3] = pd.to_datetime(df_dedup[3], errors='coerce')
