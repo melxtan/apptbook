@@ -1,4 +1,4 @@
-import streamlit as st
+import streamlit as stMore actions
 import pandas as pd
 import requests
 from openpyxl import load_workbook
@@ -74,12 +74,12 @@ def move_routine_to_newop(wb):
     ws_newop = wb["New OP"]
     ws_mrn = wb["MRN"]
 
-    # 1. Change all text in "New OP" to black
+    # 1. Reset font color in "New OP"
     for row in ws_newop.iter_rows():
         for cell in row:
             cell.font = Font(color="000000")
 
-    # 2. Get all Routine data from A6:V*
+    # 2. Read data from Routine!A6:V*
     data_rows = []
     for i in range(6, ws_routine.max_row + 1):
         row_vals = [ws_routine.cell(row=i, column=c).value for c in range(1, 23)]
@@ -90,15 +90,15 @@ def move_routine_to_newop(wb):
         print("No new data found in 'Routine'.")
         return 0
 
-    # 3. Copy new rows to "New OP" and mark as new
+    # 3. Copy new rows to New OP and mark as "Yes" in column 28 (AB)
     insert_row = ws_newop.max_row + 1
     for r_idx, row in enumerate(data_rows, insert_row):
         for c, val in enumerate(row, 1):
-            cell_value = parse_excel_date(val) if c in [4, 8] else val
-            ws_newop.cell(row=r_idx, column=c, value=cell_value)
-        ws_newop.cell(row=r_idx, column=28, value="Yes")  # Column AB → is_new = Yes
+            ws_newop.cell(row=r_idx, column=c, value=parse_excel_date(val) if c in [4, 8] else val)
+        ws_newop.cell(row=r_idx, column=28, value="Yes")
 
-    # 4. Set formats for columns D, E, H
+
+    # 4. Set number formats for columns D, E, H
     for col_letter in ["D", "E", "H"]:
         for cell in ws_newop[col_letter]:
             if col_letter in ["D", "H"]:
@@ -106,10 +106,10 @@ def move_routine_to_newop(wb):
             elif col_letter == "E":
                 cell.number_format = "hh:mm"
 
-    # 5. Deduplicate all rows, but exclude "is_new" (col 28) from deduplication key
+    # 5. Convert New OP to DataFrame and deduplicate (exclude is_new column)
     all_data = []
     for row in ws_newop.iter_rows(values_only=True):
-        all_data.append(list(row) + [None] * (28 - len(row)))  # Ensure 28 columns
+        all_data.append(list(row) + [None] * (28 - len(row)))  # Ensure 28 cols
 
     header = all_data[0]
     data = all_data[1:]
@@ -117,22 +117,29 @@ def move_routine_to_newop(wb):
 
     df_dedup = df.drop_duplicates(subset=list(range(27)), keep='first')
 
-    ws_newop.delete_rows(2, ws_newop.max_row - 1)
-    for i, row in enumerate(df_dedup.values.tolist(), 2):
-        for j, val in enumerate(row, 1):
-            cell = ws_newop.cell(row=i, column=j)
-            cell.value = parse_excel_date(val) if j in [4, 8] else val
+    # 6. Sort by column D (index 3) then E (index 4)
 
-    # 6. Sort by D then E (columns 4 and 5, 0-based index 3 and 4)
+
+
+
+
+
     df_sorted = df_dedup.sort_values(by=[3, 4], na_position='last')
 
+    # 7. Write sorted data back to New OP and apply red font where is_new == "Yes"
     ws_newop.delete_rows(2, ws_newop.max_row - 1)
     for i, row in enumerate(df_sorted.values.tolist(), 2):
+        is_new = str(row[27]).strip().lower() == "yes"
         for j, val in enumerate(row, 1):
             cell = ws_newop.cell(row=i, column=j)
             cell.value = parse_excel_date(val) if j in [4, 8] else val
+            if is_new:
+                cell.font = Font(color="FF0000")  # red font
 
-    # 7. VLOOKUP-like fill for X, Z, AA (cols 24, 26, 27)
+    # 8. Delete the "is_new" column (AB / index 28)
+    ws_newop.delete_cols(28)
+
+    # 9. VLOOKUP-like fill for X (24), Z (26), AA (27)
     mrn_data = pd.DataFrame(ws_mrn.values)
     mrn_dict_case = {}
     mrn_dict_country = {}
@@ -146,22 +153,22 @@ def move_routine_to_newop(wb):
             mrn_dict_firstres[mrn] = row[6] if len(row) > 6 else ""
 
     for row_idx in range(7, ws_newop.max_row + 1):
-        col_b = ws_newop.cell(row=row_idx, column=2).value
-        if col_b:
-            key = str(col_b)
+        mrn_val = ws_newop.cell(row=row_idx, column=2).value
+        if mrn_val:
+            key = str(mrn_val)
             if key in mrn_dict_case:
                 ws_newop.cell(row=row_idx, column=24).value = mrn_dict_case[key]
                 ws_newop.cell(row=row_idx, column=26).value = mrn_dict_country.get(key, "")
                 ws_newop.cell(row=row_idx, column=27).value = mrn_dict_firstres.get(key, "")
 
-    # 8. Clear Routine!A6:V*
+    # 10. Clear Routine!A6:V*
     for i in range(6, ws_routine.max_row + 1):
         for c in range(1, 23):
             ws_routine.cell(row=i, column=c).value = None
 
-    # 9. (Optional) Set header for "is_new" column if it doesn't exist
-    if ws_newop.cell(row=1, column=28).value is None:
-        ws_newop.cell(row=1, column=28).value = "is_new"
+
+
+
 
     print("Process completed successfully.")
     return len(data_rows)
