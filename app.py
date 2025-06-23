@@ -95,45 +95,6 @@ def parse_json_to_excel(json_data, ws_mrn):
             i += 1
     return new_mrn_count
 
-def deduplicate_mrn_by_case_id_and_today(ws_mrn):
-    """
-    Deduplicate ws_mrn by 'Case ID' (column B), 
-    keeping the row with the latest 'today' (column R).
-    Writes deduped rows back to ws_mrn (keeps headers).
-    """
-    import pandas as pd
-
-    # Read all rows as list of values
-    rows = list(ws_mrn.values)
-    if not rows or len(rows) < 2:
-        # Nothing to deduplicate
-        return 0
-
-    header, *data = rows
-    df = pd.DataFrame(data, columns=header)
-
-    # Check required columns exist
-    if "Case ID" not in df.columns or "today" not in df.columns:
-        print("Columns 'Case ID' or 'today' not found in MRN sheet.")
-        return 0
-
-    # Parse 'today' as datetime for proper sorting
-    df["today"] = pd.to_datetime(df["today"], errors="coerce")
-
-    # Sort by 'Case ID' then 'today' ascending (so last is most recent per group)
-    df = df.sort_values(by=["Case ID", "today"], ascending=[True, True])
-
-    # Deduplicate: keep last (latest 'today') for each Case ID
-    df_dedup = df.drop_duplicates(subset=["Case ID"], keep="last")
-
-    # Write back (overwrite all data except header)
-    ws_mrn.delete_rows(2, ws_mrn.max_row - 1)  # Remove all but header
-    for i, row in enumerate(df_dedup.values.tolist(), 2):
-        for j, val in enumerate(row, 1):
-            ws_mrn.cell(row=i, column=j, value=val)
-
-    return len(df) - len(df_dedup)
-
 def move_routine_to_newop(wb):
     ws_routine = wb["Routine"]
     ws_newop = wb["New OP"]
@@ -290,11 +251,7 @@ if excel_file:
                 data = response.json()
                 new_mrn = parse_json_to_excel(data, ws_mrn)
                 total_new += new_mrn
-        
-        deduped_count = deduplicate_mrn_by_case_id_and_today(ws_mrn)
         st.success(f"MRN sheet refreshed. {total_new} new MRNs imported.")
-        if deduped_count > 0:
-            st.info(f"MRN sheet deduplicated: {deduped_count} duplicate records removed by Full Case ID")
 
     if st.button("Run Outpatient Routine Process"):
         red_count = move_routine_to_newop(wb)
