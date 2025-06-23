@@ -145,7 +145,8 @@ def move_routine_to_newop(wb):
     data = all_data[1:]
     df = pd.DataFrame(data)
 
-    df_dedup = df.drop_duplicates(subset=list(range(27)), keep='first')
+    dedup_indices = [i for i in range(27) if i != 17]  # Exclude column R (18th col, index 17)
+    df_dedup = df.drop_duplicates(subset=dedup_indices, keep='first')
 
     # 6. Ensure columns D (3) and E (4) are correct types for sorting
     df_dedup[3] = pd.to_datetime(df_dedup[3], errors='coerce')
