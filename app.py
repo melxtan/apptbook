@@ -156,26 +156,26 @@ def move_routine_to_newop(wb):
     # 7. Write sorted data back to New OP and apply red font where is_new == "Yes"
     ws_newop.delete_rows(2, ws_newop.max_row - 1)
     for i, row in enumerate(df_sorted.values.tolist(), 2):
-    is_new = str(row[27]).strip().lower() == "yes"
-    for j, val in enumerate(row, 1):
-        cell = ws_newop.cell(row=i, column=j)
-        if j == 4:  # D: date
-            cell.value = parse_excel_date(val, force_date_only=True)
-            cell.number_format = "mm/dd/yyyy"
-        elif j == 5:  # E: time
-            tval = parse_to_time(val)
-            cell.value = tval
-            cell.number_format = "hh:mm"
-        elif j == 8:  # H: date
-            cell.value = parse_excel_date(val)
-            cell.number_format = "mm/dd/yyyy"
-        elif j == 18:  # R: date
-            cell.value = parse_excel_date(val, force_date_only=True)
-            cell.number_format = "mm/dd/yyyy"
-        else:
-            cell.value = val
-        if is_new:
-            cell.font = Font(color="FF0000")  # red font
+        is_new = str(row[27]).strip().lower() == "yes"
+        for j, val in enumerate(row, 1):
+            cell = ws_newop.cell(row=i, column=j)
+            if j == 4:  # D: date
+                cell.value = parse_excel_date(val, force_date_only=True)
+                cell.number_format = "mm/dd/yyyy"
+            elif j == 5:  # E: time
+                tval = parse_to_time(val)
+                cell.value = tval
+                cell.number_format = "hh:mm"
+            elif j == 8:  # H: date
+                cell.value = parse_excel_date(val)
+                cell.number_format = "mm/dd/yyyy"
+            elif j == 18:  # R: date
+                cell.value = parse_excel_date(val, force_date_only=True)
+                cell.number_format = "mm/dd/yyyy"
+            else:
+                cell.value = val
+            if is_new:
+                cell.font = Font(color="FF0000")  # red font
 
     # 8. Delete the "is_new" column (AB / index 28)
     ws_newop.delete_cols(28)
