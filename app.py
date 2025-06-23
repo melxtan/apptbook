@@ -212,7 +212,7 @@ def move_routine_to_newop(wb):
             mrn_dict_country[mrn] = row[5] if len(row) > 5 else ""
             mrn_dict_firstres[mrn] = row[6] if len(row) > 6 else ""
 
-    for row_idx in range(7, ws_newop.max_row + 1):
+    for row_idx in range(1, ws_newop.max_row + 1):
         mrn_val = ws_newop.cell(row=row_idx, column=2).value
         if mrn_val:
             key = str(mrn_val)
