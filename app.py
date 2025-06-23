@@ -167,23 +167,18 @@ def move_routine_to_newop(wb):
         is_new = str(row[27]).strip().lower() == "yes"
         for j, val in enumerate(row, 1):
             cell = ws_newop.cell(row=i, column=j)
-            if j == 4:  # D: date
-                cell.value = parse_excel_date(val, force_date_only=True)
+            if j in [4, 8, 18]:  # D, H, R
+                dt = parse_excel_date(val, force_date_only=True)
+                cell.value = dt
                 cell.number_format = "mm/dd/yyyy"
-            elif j == 5:  # E: time
+            elif j == 5:  # E
                 tval = parse_to_time(val)
                 cell.value = tval
                 cell.number_format = "hh:mm"
-            elif j == 8:  # H: date
-                cell.value = parse_excel_date(val)
-                cell.number_format = "mm/dd/yyyy"
-            elif j == 18:  # R: date
-                cell.value = parse_excel_date(val, force_date_only=True)
-                cell.number_format = "mm/dd/yyyy"
             else:
                 cell.value = val
             if is_new:
-                cell.font = Font(color="FF0000")  # red font
+                cell.font = Font(color="FF0000")
 
     # 8. Delete the "is_new" column (AB / index 28)
     ws_newop.delete_cols(28)
