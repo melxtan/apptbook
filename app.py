@@ -2,48 +2,56 @@ import streamlit as st
 import pandas as pd
 import requests
 from openpyxl import load_workbook
-from openpyxl.styles import Font
-from openpyxl.utils import get_column_letter
+from office365.sharepoint.client_context import ClientContext
+from office365.runtime.auth.user_credential import UserCredential
 from io import BytesIO
 from datetime import datetime, timedelta
 
 st.set_page_config(layout="wide")
-st.title("Automated REDCap & Excel Workflow")
+st.title("Automated REDCap & Excel Workflow with SharePoint Integration")
 
-excel_file = st.file_uploader("Upload Excel File (.xlsx)", type=["xlsx"])
+SHAREPOINT_URL = "https://keckmedicine.sharepoint.com/sites/InternationalProgram&TeleCAREDepartment"
+SHAREPOINT_FILE = "/sites/InternationalProgram&TeleCAREDepartment/Shared Documents/General/Operation/Apptbook 6.20.25.xlsx"
 
+username = st.secrets["sharepoint_username"]
+password = st.secrets["sharepoint_password"]
 api_keys = [st.secrets["redcap_api_1"], st.secrets["redcap_api_2"]]
 
+def get_sharepoint_excel():
+    ctx = ClientContext(SHAREPOINT_URL).with_credentials(UserCredential(username, password))
+    response = ctx.web.get_file_by_server_relative_url(SHAREPOINT_FILE).download()
+    response.execute_query()
+    return BytesIO(response.value)
+
+def upload_sharepoint_excel(wb):
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    target_folder_url = "/sites/InternationalProgram&TeleCAREDepartment/Shared Documents/General/Operation"
+    ctx = ClientContext(SHAREPOINT_URL).with_credentials(UserCredential(username, password))
+    ctx.web.get_folder_by_server_relative_url(target_folder_url)\
+        .upload_file("Apptbook 6.20.25.xlsx", output.read())\
+        .execute_query()
+    return True
+
 def parse_excel_date(val):
-    """Convert Excel serial or string into datetime or return original if not parseable."""
+    # ... (your function unchanged)
     if val is None or val == "":
         return None
-
-    # Excel date serial number (assuming 1900 date system)
     if isinstance(val, (int, float)):
-        # Excel's day 1 is 1899-12-31, but due to leap year bug, we subtract 2
         return datetime(1899, 12, 30) + timedelta(days=float(val))
-
-    # If it's already a datetime object
     if isinstance(val, datetime):
         return val
-
-    # Try parsing common date/time string formats
     str_val = str(val).strip()
     for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d-%b-%Y", "%Y/%m/%d", "%m/%d/%y", "%Y-%m-%d %H:%M:%S"):
         try:
             return datetime.strptime(str_val, fmt)
         except ValueError:
             continue
-
-    # Fallback: try pandas parser if available (optional)
     try:
-        import pandas as pd
         return pd.to_datetime(str_val, errors='coerce')
     except:
         pass
-
-    # If all parsing fails, return original
     return val
 
 def parse_json_to_excel(json_data, ws_mrn):
@@ -162,8 +170,15 @@ def move_routine_to_newop(wb):
     print("Process completed successfully.")
     return len(data_rows)
 
-if excel_file:
-    excel_bytes = BytesIO(excel_file.read())
+st.subheader("1. Download latest Excel from SharePoint")
+
+if st.button("Download from SharePoint"):
+    excel_bytes = get_sharepoint_excel()
+    st.session_state["excel_bytes"] = excel_bytes
+    st.success("Downloaded latest Excel from SharePoint!")
+
+if "excel_bytes" in st.session_state:
+    excel_bytes = st.session_state["excel_bytes"]
     wb = load_workbook(excel_bytes)
 
     if st.button("Refresh MRN sheet from REDCap (API)"):
@@ -190,6 +205,7 @@ if excel_file:
         red_count = move_routine_to_newop(wb)
         st.success(f"Routine → New OP processing done. {red_count} newly unique records highlighted in red.")
 
+    # Download processed file for local review
     output = BytesIO()
     wb.save(output)
     st.download_button(
@@ -199,7 +215,17 @@ if excel_file:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
-    st.info("You can now upload this Excel to SharePoint if needed.")
+    st.subheader("2. Upload processed Excel back to SharePoint")
+    if st.button("Upload to SharePoint"):
+        upload_sharepoint_excel(wb)
+        st.success("Processed file uploaded back to SharePoint!")
 
 else:
-    st.info("Please upload your Excel file (with CSV data already pasted into Routine tab, A6).")
+    st.info("Click 'Download from SharePoint' to start. Or, upload Excel manually below:")
+
+    # Optionally, still allow manual upload
+    excel_file = st.file_uploader("Upload Excel File (.xlsx)", type=["xlsx"])
+    if excel_file:
+        excel_bytes = BytesIO(excel_file.read())
+        st.session_state["excel_bytes"] = excel_bytes
+        st.success("File uploaded. You may now run processes.")
