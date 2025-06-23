@@ -161,7 +161,7 @@ def move_routine_to_newop(wb):
     df_dedup[3] = pd.to_datetime(df_dedup[3], errors='coerce')
     df_dedup[4] = df_dedup[4].apply(parse_to_time)
 
-    df_sorted = df_dedup.sort_values(by=[3, 4], na_position='last')
+    df_sorted = df_dedup.sort_values(by=[3, 4, 1, 0], na_position='last')
 
     # 7. Write sorted data back to New OP and apply red font where is_new == "Yes"
     ws_newop.delete_rows(2, ws_newop.max_row - 1)
