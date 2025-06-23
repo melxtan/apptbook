@@ -19,9 +19,10 @@ api_keys = [st.secrets["redcap_api_1"], st.secrets["redcap_api_2"]]
 
 def get_sharepoint_excel():
     ctx = ClientContext(SHAREPOINT_URL).with_credentials(UserCredential(username, password))
-    response = ctx.web.get_file_by_server_relative_url(SHAREPOINT_FILE).download()
-    response.execute_query()
-    return BytesIO(response.value)
+    file_obj = BytesIO()
+    ctx.web.get_file_by_server_relative_url(SHAREPOINT_FILE).download(file_obj).execute_query()
+    file_obj.seek(0)
+    return file_obj
 
 def upload_sharepoint_excel(wb):
     output = BytesIO()
