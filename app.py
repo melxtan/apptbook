@@ -156,7 +156,7 @@ def move_routine_to_newop(wb):
         if col not in date_indices:
             df[col] = df[col].apply(lambda x: str(x).strip() if x is not None else x)
 
-df_dedup = df.drop_duplicates(subset=dedup_indices, keep='first')
+    df_dedup = df.drop_duplicates(subset=dedup_indices, keep='first')
 
 
     # 6. Ensure columns D (3) and E (4) are correct types for sorting
