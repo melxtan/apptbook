@@ -141,9 +141,7 @@ def move_routine_to_newop(wb):
     for row in ws_newop.iter_rows(values_only=True):
         all_data.append(list(row) + [None] * (28 - len(row)))  # Ensure 28 cols
 
-    header = all_data[0]
-    data = all_data[1:]
-    df = pd.DataFrame(data)
+    df = pd.DataFrame(all_data)
 
     # Ignore R (17), W–AA (22-26)
     ignore_indices = [17] + list(range(22, 27))
