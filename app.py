@@ -136,17 +136,16 @@ def move_routine_to_newop(wb):
             elif col_letter == "E":
                 cell.number_format = "hh:mm"
 
-    # 5. Convert New OP to DataFrame and deduplicate (exclude is_new column)
+    # 5. Convert New OP to DataFrame and deduplicate ONLY on columns A,B,C,D,E,F,G,U,V
     all_data = []
     for row in ws_newop.iter_rows(values_only=True):
         all_data.append(list(row) + [None] * (28 - len(row)))  # Ensure 28 cols
 
     df = pd.DataFrame(all_data)
 
-    # Ignore R (17), W–AA (22-26)
-    ignore_indices = [17] + list(range(22, 27))
-    dedup_indices = [i for i in range(27) if i not in ignore_indices]
-    date_indices = [3, 7]  # D and H
+    # CHANGED: Only deduplicate on columns A,B,C,D,E,F,G,U,V (indices 0,1,2,3,4,5,6,20,21)
+    dedup_indices = [0, 1, 2, 3, 4, 5, 6, 20, 21]
+    date_indices = [3, 7]  # D and H (indices 3 and 7)
     
     df = df.fillna("")
     
@@ -165,6 +164,7 @@ def move_routine_to_newop(wb):
     
     # Debug output (remove in production if desired)
     print(f"Before deduplication: {len(df)} rows")
+    print(f"Deduplicating on columns: A, B, C, D, E, F, G, U, V only")
     
     df_dedup = df.drop_duplicates(subset=dedup_indices, keep='first')
     
