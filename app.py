@@ -14,32 +14,44 @@ excel_file = st.file_uploader("Upload Excel File (.xlsx)", type=["xlsx"])
 
 api_keys = [st.secrets["redcap_api_1"], st.secrets["redcap_api_2"]]
 
-def parse_excel_date(val):
-    """Convert Excel serial or string into datetime or return original if not parseable."""
+def parse_excel_date(val, force_date_only=False):
+    """Convert Excel serial or string into datetime or return original if not parseable.
+    If force_date_only, strip time parts and ensure year is correct for two-digit years.
+    """
     if val is None or val == "":
         return None
 
     # Excel date serial number (assuming 1900 date system)
     if isinstance(val, (int, float)):
-        # Excel's day 1 is 1899-12-31, but due to leap year bug, we subtract 2
-        return datetime(1899, 12, 30) + timedelta(days=float(val))
+        dt = datetime(1899, 12, 30) + timedelta(days=float(val))
+        return dt.date() if force_date_only else dt
 
     # If it's already a datetime object
     if isinstance(val, datetime):
-        return val
+        return val.date() if force_date_only else val
 
     # Try parsing common date/time string formats
     str_val = str(val).strip()
     for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d-%b-%Y", "%Y/%m/%d", "%m/%d/%y", "%Y-%m-%d %H:%M:%S"):
         try:
-            return datetime.strptime(str_val, fmt)
+            dt = datetime.strptime(str_val, fmt)
+            # For two-digit year: if parsed year is > (this year + 1), treat as 1900s
+            if fmt == "%m/%d/%y" and dt.year > datetime.now().year + 1:
+                dt = dt.replace(year=dt.year - 100)
+            return dt.date() if force_date_only else dt
         except ValueError:
             continue
 
     # Fallback: try pandas parser if available (optional)
     try:
         import pandas as pd
-        return pd.to_datetime(str_val, errors='coerce')
+        dt = pd.to_datetime(str_val, errors='coerce')
+        if pd.isnull(dt):
+            return val
+        # pandas handles two-digit years as 2000s by default, so correct if necessary
+        if dt.year > datetime.now().year + 1 and len(str_val.split('/')[-1]) == 2:
+            dt = dt.replace(year=dt.year - 100)
+        return dt.date() if force_date_only else dt
     except:
         pass
 
@@ -94,9 +106,15 @@ def move_routine_to_newop(wb):
     insert_row = ws_newop.max_row + 1
     for r_idx, row in enumerate(data_rows, insert_row):
         for c, val in enumerate(row, 1):
-            ws_newop.cell(row=r_idx, column=c, value=parse_excel_date(val) if c in [4, 8] else val)
+            # If writing to column D (4), force date only and fix 19xx/20xx
+            if c == 4:
+                ws_newop.cell(row=r_idx, column=c, value=parse_excel_date(val, force_date_only=True))
+            # If writing to column H (8), parse as date/datetime
+            elif c == 8:
+                ws_newop.cell(row=r_idx, column=c, value=parse_excel_date(val))
+            else:
+                ws_newop.cell(row=r_idx, column=c, value=val)
         ws_newop.cell(row=r_idx, column=28, value="Yes")
-
 
     # 4. Set number formats for columns D, E, H
     for col_letter in ["D", "E", "H"]:
@@ -118,12 +136,6 @@ def move_routine_to_newop(wb):
     df_dedup = df.drop_duplicates(subset=list(range(27)), keep='first')
 
     # 6. Sort by column D (index 3) then E (index 4)
-
-
-
-
-
-
     df_sorted = df_dedup.sort_values(by=[3, 4], na_position='last')
 
     # 7. Write sorted data back to New OP and apply red font where is_new == "Yes"
@@ -132,7 +144,16 @@ def move_routine_to_newop(wb):
         is_new = str(row[27]).strip().lower() == "yes"
         for j, val in enumerate(row, 1):
             cell = ws_newop.cell(row=i, column=j)
-            cell.value = parse_excel_date(val) if j in [4, 8] else val
+            # j == 4 means column D (date only)
+            if j == 4:
+                cell.value = parse_excel_date(val, force_date_only=True)
+                cell.number_format = "mm/dd/yyyy"
+            # j == 8 means column H (datetime or date)
+            elif j == 8:
+                cell.value = parse_excel_date(val)
+                cell.number_format = "mm/dd/yyyy"
+            else:
+                cell.value = val
             if is_new:
                 cell.font = Font(color="FF0000")  # red font
 
@@ -165,10 +186,6 @@ def move_routine_to_newop(wb):
     for i in range(6, ws_routine.max_row + 1):
         for c in range(1, 23):
             ws_routine.cell(row=i, column=c).value = None
-
-
-
-
 
     print("Process completed successfully.")
     return len(data_rows)
