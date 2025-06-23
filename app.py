@@ -135,12 +135,27 @@ def move_routine_to_newop(wb):
 
     df_dedup = df.drop_duplicates(subset=list(range(27)), keep='first')
 
-    # 6. Ensure columns D and E are both pd.Timestamp (datetime64)
-    for col in [3, 4]:
-        df_dedup[col] = pd.to_datetime(df_dedup[col], errors='coerce')
+    # 6. Ensure columns D (3) and E (4) are correct types for sorting
     
-    # Now safe to sort
+    df_dedup[3] = pd.to_datetime(df_dedup[3], errors='coerce')
+    
+    def parse_to_time(val):
+        if pd.isnull(val) or val == "":
+            return None
+        if isinstance(val, datetime):
+            return val.time()
+        if isinstance(val, str):
+            for fmt in ("%H:%M", "%I:%M %p", "%H:%M:%S"):
+                try:
+                    return datetime.strptime(val.strip(), fmt).time()
+                except Exception:
+                    continue
+        return None
+    
+    df_dedup[4] = df_dedup[4].apply(parse_to_time)
+    
     df_sorted = df_dedup.sort_values(by=[3, 4], na_position='last')
+
 
     # 7. Write sorted data back to New OP and apply red font where is_new == "Yes"
     ws_newop.delete_rows(2, ws_newop.max_row - 1)
@@ -148,11 +163,12 @@ def move_routine_to_newop(wb):
         is_new = str(row[27]).strip().lower() == "yes"
         for j, val in enumerate(row, 1):
             cell = ws_newop.cell(row=i, column=j)
-            # j == 4 means column D (date only)
             if j == 4:
                 cell.value = parse_excel_date(val, force_date_only=True)
                 cell.number_format = "mm/dd/yyyy"
-            # j == 8 means column H (datetime or date)
+            elif j == 5:
+                cell.value = val if (val is None or isinstance(val, str)) else val.strftime("%H:%M")
+                cell.number_format = "hh:mm"
             elif j == 8:
                 cell.value = parse_excel_date(val)
                 cell.number_format = "mm/dd/yyyy"
