@@ -1,4 +1,5 @@
 import streamlit as st
+import numpy as np
 import pandas as pd
 import requests
 from openpyxl import load_workbook
@@ -137,22 +138,36 @@ def move_routine_to_newop(wb):
                 cell.number_format = "hh:mm"
 
     # 5. Convert New OP to DataFrame and deduplicate ONLY on columns A to V (indices 0–21)
+    import numpy as np
+
     all_data = []
     for row in ws_newop.iter_rows(values_only=True):
-        all_data.append(list(row) + [None] * (28 - len(row)))  # Ensure 28 cols
+        # Pad each row to length 28 (columns A to AB)
+        padded = list(row) + ["" for _ in range(28 - len(row))]
+        all_data.append(padded)
     
     df = pd.DataFrame(all_data)
-    df = df.fillna("")
+    
+    # Normalize all values in columns A–V (indices 0–21):
+    def normalize(val):
+        # Treat None, np.nan, and '' the same
+        if val is None or (isinstance(val, float) and np.isnan(val)):
+            return ""
+        # Optional: convert everything to string and strip
+        return str(val).strip()
+    
+    for col in range(22):  # Columns 0 to 21 (A–V)
+        df[col] = df[col].apply(normalize)
     
     print(f"Before deduplication: {len(df)} rows")
     print("Deduplicating on columns A to V only (0–21)")
     
-    # Deduplicate on columns A–V only
-    df = df.fillna("")
+    # Now deduplicate
     df_dedup = df.drop_duplicates(subset=list(range(22)), keep='first')
     
     print(f"After deduplication: {len(df_dedup)} rows")
     print(f"Removed {len(df) - len(df_dedup)} duplicate rows")
+
 
     # 6. Ensure columns D (3) and E (4) are correct types for sorting
     df_dedup[3] = pd.to_datetime(df_dedup[3], errors='coerce')
