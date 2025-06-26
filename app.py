@@ -13,7 +13,86 @@ excel_file = st.file_uploader("Upload Excel File (.xlsx)", type=["xlsx"])
 
 api_keys = [st.secrets["redcap_api_1"], st.secrets["redcap_api_2"]]
 
-# ...[parse_excel_date, parse_to_time, parse_json_to_excel as in your code]...
+def parse_excel_date(val, force_date_only=False):
+    if val is None or val == "":
+        return None
+
+    # Excel date serial number (assuming 1900 date system)
+    if isinstance(val, (int, float)):
+        dt = datetime(1899, 12, 30) + timedelta(days=float(val))
+        return dt.date() if force_date_only else dt
+
+    if isinstance(val, datetime):
+        return val.date() if force_date_only else val
+
+    str_val = str(val).strip()
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d-%b-%Y", "%Y/%m/%d", "%m/%d/%y", "%Y-%m-%d %H:%M:%S"):
+        try:
+            dt = datetime.strptime(str_val, fmt)
+            if fmt == "%m/%d/%y" and dt.year > datetime.now().year + 1:
+                dt = dt.replace(year=dt.year - 100)
+            return dt.date() if force_date_only else dt
+        except ValueError:
+            continue
+
+    try:
+        dt = pd.to_datetime(str_val, errors='coerce')
+        if pd.isnull(dt):
+            return val
+        if dt.year > datetime.now().year + 1 and len(str_val.split('/')[-1]) == 2:
+            dt = dt.replace(year=dt.year - 100)
+        return dt.date() if force_date_only else dt
+    except:
+        pass
+
+    return val
+
+def parse_to_time(val):
+    """Parse value to a datetime.time object or None."""
+    if val is None or val == "" or pd.isnull(val):
+        return None
+    if isinstance(val, time):
+        return val
+    if isinstance(val, datetime):
+        return val.time()
+    if isinstance(val, timedelta):
+        dummy = (datetime(1900, 1, 1) + val)
+        return dummy.time()
+    if isinstance(val, (float, int)):
+        # Excel time as fraction of day
+        t = (datetime(1899, 12, 30) + timedelta(days=float(val))).time()
+        return t
+    if isinstance(val, str):
+        s = val.strip()
+        for fmt in ("%H:%M", "%I:%M %p", "%H:%M:%S"):
+            try:
+                return datetime.strptime(s, fmt).time()
+            except Exception:
+                continue
+    return None
+
+def parse_json_to_excel(json_data, ws_mrn):
+    existing_case_ids = set()
+    for row in ws_mrn.iter_rows(min_row=2, max_row=ws_mrn.max_row, min_col=9, max_col=9, values_only=True):
+        if row[0]:
+            existing_case_ids.add(str(row[0]).strip())
+    new_mrn_count = 0
+    i = ws_mrn.max_row + 1
+    for record in json_data:
+        incoming_case_id = str(record.get("full_case_id", "")).strip()
+        if record.get("mrn") and incoming_case_id not in existing_case_ids:
+            fields = [
+                "mrn", "case_id", "redcap_event_name", "redcap_repeat_instrument",
+                "redcap_repeat_instance", "country_origin", "first_responder",
+                "internal_referral", "full_case_id", "arm_label", "email",
+                "num_appt", "payer_type", "other_refer", "pt_fn", "pt_ln",
+                "pt_dob", "today", "service_line"
+            ]
+            for col_idx, field in enumerate(fields, 1):
+                ws_mrn.cell(row=i, column=col_idx, value=record.get(field, ""))
+            new_mrn_count += 1
+            i += 1
+    return new_mrn_count
 
 def move_routine_to_newop(df_newop, df_routine, df_mrn):
     # [Your logic unchanged, but function returns dataframes, not counts]
