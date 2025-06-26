@@ -148,6 +148,7 @@ def move_routine_to_newop(wb):
     print("Deduplicating on columns A to V only (0–21)")
     
     # Deduplicate on columns A–V only
+    df = df.fillna("")
     df_dedup = df.drop_duplicates(subset=list(range(22)), keep='first')
     
     print(f"After deduplication: {len(df_dedup)} rows")
