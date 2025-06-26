@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 from openpyxl import load_workbook
 from openpyxl.styles import Font
+from openpyxl.utils import get_column_letter
 from io import BytesIO
 from datetime import datetime, timedelta, time
 
@@ -10,7 +11,66 @@ st.set_page_config(layout="wide")
 st.title("Automated REDCap & Excel Workflow")
 
 excel_file = st.file_uploader("Upload Excel File (.xlsx)", type=["xlsx"])
+
 api_keys = [st.secrets["redcap_api_1"], st.secrets["redcap_api_2"]]
+
+def parse_excel_date(val, force_date_only=False):
+    if val is None or val == "":
+        return None
+
+    # Excel date serial number (assuming 1900 date system)
+    if isinstance(val, (int, float)):
+        dt = datetime(1899, 12, 30) + timedelta(days=float(val))
+        return dt.date() if force_date_only else dt
+
+    if isinstance(val, datetime):
+        return val.date() if force_date_only else val
+
+    str_val = str(val).strip()
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d-%b-%Y", "%Y/%m/%d", "%m/%d/%y", "%Y-%m-%d %H:%M:%S"):
+        try:
+            dt = datetime.strptime(str_val, fmt)
+            if fmt == "%m/%d/%y" and dt.year > datetime.now().year + 1:
+                dt = dt.replace(year=dt.year - 100)
+            return dt.date() if force_date_only else dt
+        except ValueError:
+            continue
+
+    try:
+        dt = pd.to_datetime(str_val, errors='coerce')
+        if pd.isnull(dt):
+            return val
+        if dt.year > datetime.now().year + 1 and len(str_val.split('/')[-1]) == 2:
+            dt = dt.replace(year=dt.year - 100)
+        return dt.date() if force_date_only else dt
+    except:
+        pass
+
+    return val
+
+def parse_to_time(val):
+    """Parse value to a datetime.time object or None."""
+    if val is None or val == "" or pd.isnull(val):
+        return None
+    if isinstance(val, time):
+        return val
+    if isinstance(val, datetime):
+        return val.time()
+    if isinstance(val, timedelta):
+        dummy = (datetime(1900, 1, 1) + val)
+        return dummy.time()
+    if isinstance(val, (float, int)):
+        # Excel time as fraction of day
+        t = (datetime(1899, 12, 30) + timedelta(days=float(val))).time()
+        return t
+    if isinstance(val, str):
+        s = val.strip()
+        for fmt in ("%H:%M", "%I:%M %p", "%H:%M:%S"):
+            try:
+                return datetime.strptime(s, fmt).time()
+            except Exception:
+                continue
+    return None
 
 def parse_json_to_excel(json_data, ws_mrn):
     existing_case_ids = set()
@@ -35,73 +95,146 @@ def parse_json_to_excel(json_data, ws_mrn):
             i += 1
     return new_mrn_count
 
-def sheet_to_df(ws):
-    data = list(ws.values)
-    if not data or not data[0]:
-        return pd.DataFrame()
-    cols = [str(c) if c is not None else f'col{ix+1}' for ix, c in enumerate(data[0])]
-    return pd.DataFrame(data[1:], columns=cols)
+def move_routine_to_newop(wb):
+    ws_routine = wb["Routine"]
+    ws_newop = wb["New OP"]
+    ws_mrn = wb["MRN"]
 
-def df_to_sheet(ws, df, highlight_rows=None):
-    # Overwrite worksheet with DataFrame content, with optional highlighting.
-    ws.delete_rows(2, ws.max_row-1)
-    for r_idx, row in enumerate(df.itertuples(index=False), start=2):
-        for c_idx, val in enumerate(row, start=1):
-            cell = ws.cell(row=r_idx, column=c_idx, value=val)
-            if highlight_rows and (r_idx-2) in highlight_rows:
-                cell.font = Font(color='FF0000')
+    # 1. Reset font color in "New OP"
+    for row in ws_newop.iter_rows():
+        for cell in row:
+            cell.font = Font(color="000000")
 
-def move_routine_to_newop(df_newop, df_routine, df_mrn):
-    # 1. Extract routine rows to move (rows 6+, A-V)
-    df_routine_to_move = df_routine.iloc[5:, :22].copy()
-    df_routine_to_move = df_routine_to_move.dropna(how='all')
-    if df_routine_to_move.empty:
-        return df_newop, df_routine, df_mrn, []
+    # 2. Read data from Routine!A6:V*
+    data_rows = []
+    for i in range(6, ws_routine.max_row + 1):
+        row_vals = [ws_routine.cell(row=i, column=c).value for c in range(1, 23)]
+        if any(v not in [None, ""] for v in row_vals):
+            data_rows.append(row_vals)
+
+    if not data_rows:
+        print("No new data found in 'Routine'.")
+        return 0
+
+    # 3. Copy new rows to New OP and mark as "Yes" in column 28 (AB)
+    insert_row = ws_newop.max_row + 1
+    for r_idx, row in enumerate(data_rows, insert_row):
+        for c, val in enumerate(row, 1):
+            if c == 4:
+                ws_newop.cell(row=r_idx, column=c, value=parse_excel_date(val, force_date_only=True))
+            elif c == 8:
+                ws_newop.cell(row=r_idx, column=c, value=parse_excel_date(val))
+            else:
+                ws_newop.cell(row=r_idx, column=c, value=val)
+        ws_newop.cell(row=r_idx, column=28, value="Yes")
+
+    # 4. Set number formats for columns D, E, H
+    for col_letter in ["D", "E", "H"]:
+        for cell in ws_newop[col_letter]:
+            if col_letter in ["D", "H"]:
+                cell.number_format = "mm/dd/yyyy"
+            elif col_letter == "E":
+                cell.number_format = "hh:mm"
+
+    # 5. Convert New OP to DataFrame and deduplicate ONLY on columns A,B,C,D,E,F,G,U,V
+    all_data = []
+    for row in ws_newop.iter_rows(values_only=True):
+        all_data.append(list(row) + [None] * (28 - len(row)))  # Ensure 28 cols
+
+    df = pd.DataFrame(all_data)
+
+    # CHANGED: Only deduplicate on columns A,B,C,D,E,F,G,U,V (indices 0,1,2,3,4,5,6,20,21)
+    dedup_indices = [0, 1, 2, 3, 4, 5, 6, 20, 21]
+    date_indices = [3, 7]  # D and H (indices 3 and 7)
     
-    # 2. Expand routine to match newop columns
-    missing_cols = [col for col in df_newop.columns if col not in df_routine_to_move.columns]
-    for col in missing_cols:
-        df_routine_to_move[col] = ""
-    df_routine_to_move = df_routine_to_move[df_newop.columns]
+    df = df.fillna("")
+    
+    # FIXED: Normalize data types consistently BEFORE deduplication
+    for col in dedup_indices:
+        if col not in date_indices and col != 4:  # Skip date columns and time column
+            # Convert everything to string and normalize
+            df[col] = df[col].apply(lambda x: str(x).strip() if x is not None and x != "" else "")
+        elif col in date_indices:
+            # Normalize dates
+            df[col] = pd.to_datetime(df[col], errors='coerce')
+    
+    # Normalize times in column E (index 4)
+    if 4 in dedup_indices:
+        df[4] = df[4].apply(parse_to_time)
+    
+    # Debug output (remove in production if desired)
+    print(f"Before deduplication: {len(df)} rows")
+    print(f"Deduplicating on columns: A, B, C, D, E, F, G, U, V only")
+    
+    df_dedup = df.drop_duplicates(subset=dedup_indices, keep='first')
+    
+    print(f"After deduplication: {len(df_dedup)} rows")
+    print(f"Removed {len(df) - len(df_dedup)} duplicate rows")
 
-    # 3. Concatenate
-    before_rows = len(df_newop)
-    df_newop = pd.concat([df_newop, df_routine_to_move], ignore_index=True)
-    # Mark moved rows (for highlighting in Excel)
-    highlight_rows = list(range(before_rows, before_rows + len(df_routine_to_move)))
+    # 6. Ensure columns D (3) and E (4) are correct types for sorting
+    df_dedup[3] = pd.to_datetime(df_dedup[3], errors='coerce')
+    df_dedup[4] = df_dedup[4].apply(parse_to_time)
 
-    # 4. VLOOKUP: Fill X (23), Z (25), AA (26)
-    for idx in highlight_rows:
-        lookup_val = df_newop.iloc[idx, 1]  # Column B: MRN or ID
-        # MRN tab: column 0: MRN, 1: case_id, ..., 5: col F, 6: col G
-        vlookup_row = df_mrn[df_mrn.iloc[:, 0] == lookup_val]
-        if not vlookup_row.empty:
-            if df_newop.shape[1] > 23:
-                df_newop.iat[idx, 23] = vlookup_row.iloc[0, 1] if df_mrn.shape[1] > 1 else ""
-            if df_newop.shape[1] > 25:
-                df_newop.iat[idx, 25] = vlookup_row.iloc[0, 5] if df_mrn.shape[1] > 5 else ""
-            if df_newop.shape[1] > 26:
-                df_newop.iat[idx, 26] = vlookup_row.iloc[0, 6] if df_mrn.shape[1] > 6 else ""
-    # 5. Remove duplicates (A:AA)
-    df_newop = df_newop.drop_duplicates(subset=list(df_newop.columns[:27]), keep='first').reset_index(drop=True)
+    df_sorted = df_dedup.sort_values(by=[3, 4, 1, 0], na_position='last')
 
-    # 6. Clear Routine rows 6+ (A–V)
-    df_routine.iloc[5:, :22] = ""
+    # 7. Write sorted data back to New OP and apply red font where is_new == "Yes"
+    ws_newop.delete_rows(2, ws_newop.max_row - 1)
+    for i, row in enumerate(df_sorted.values.tolist(), 2):
+        is_new = str(row[27]).strip().lower() == "yes"
+        for j, val in enumerate(row, 1):
+            cell = ws_newop.cell(row=i, column=j)
+            if j in [4, 8, 18]:  # D, H, R
+                dt = parse_excel_date(val, force_date_only=True)
+                cell.value = dt
+                cell.number_format = "mm/dd/yyyy"
+            elif j == 5:  # E
+                tval = parse_to_time(val)
+                cell.value = tval
+                cell.number_format = "hh:mm"
+            else:
+                cell.value = val
+            if is_new:
+                cell.font = Font(color="FF0000")
 
-    return df_newop, df_routine, df_mrn, highlight_rows
+    # 8. Delete the "is_new" column (AB / index 28)
+    ws_newop.delete_cols(28)
+
+    # 9. VLOOKUP-like fill for X (24), Z (26), AA (27)
+    mrn_data = pd.DataFrame(ws_mrn.values)
+    mrn_dict_case = {}
+    mrn_dict_country = {}
+    mrn_dict_firstres = {}
+
+    for idx, row in mrn_data.iterrows():
+        if pd.notnull(row[0]):
+            mrn = str(row[0])
+            mrn_dict_case[mrn] = row[1] if len(row) > 1 else ""
+            mrn_dict_country[mrn] = row[5] if len(row) > 5 else ""
+            mrn_dict_firstres[mrn] = row[6] if len(row) > 6 else ""
+
+    for row_idx in range(1, ws_newop.max_row + 1):
+        mrn_val = ws_newop.cell(row=row_idx, column=2).value
+        if mrn_val:
+            key = str(mrn_val)
+            if key in mrn_dict_case:
+                ws_newop.cell(row=row_idx, column=24).value = mrn_dict_case[key]
+                ws_newop.cell(row=row_idx, column=26).value = mrn_dict_country.get(key, "")
+                ws_newop.cell(row=row_idx, column=27).value = mrn_dict_firstres.get(key, "")
+
+    # 10. Clear Routine!A6:V*
+    for i in range(6, ws_routine.max_row + 1):
+        for c in range(1, 23):
+            ws_routine.cell(row=i, column=c).value = None
+
+    print("Process completed successfully.")
+    return len(data_rows)
 
 if excel_file:
     excel_bytes = BytesIO(excel_file.read())
     wb = load_workbook(excel_bytes)
-    ws_newop = wb["New OP"]
-    ws_routine = wb["Routine"]
-    ws_mrn = wb["MRN"]
-
-    df_newop = sheet_to_df(ws_newop)
-    df_routine = sheet_to_df(ws_routine)
-    df_mrn = sheet_to_df(ws_mrn)
 
     if st.button("Refresh MRN sheet from REDCap (API)"):
+        ws_mrn = wb["MRN"]
         total_new = 0
         for key in api_keys:
             response = requests.post(
@@ -121,11 +254,8 @@ if excel_file:
         st.success(f"MRN sheet refreshed. {total_new} new MRNs imported.")
 
     if st.button("Run Outpatient Routine Process"):
-        df_newop_updated, df_routine_updated, df_mrn_updated, highlight_rows = move_routine_to_newop(df_newop, df_routine, df_mrn)
-        df_to_sheet(ws_newop, df_newop_updated, highlight_rows)
-        df_to_sheet(ws_routine, df_routine_updated)
-        df_to_sheet(ws_mrn, df_mrn_updated)
-        st.success(f"Routine → New OP processing done. {len(highlight_rows)} rows moved and highlighted.")
+        red_count = move_routine_to_newop(wb)
+        st.success(f"Routine → New OP processing done. {red_count} newly unique records highlighted in red.")
 
     output = BytesIO()
     wb.save(output)
@@ -135,6 +265,7 @@ if excel_file:
         file_name="processed_result.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
     st.info("You can now upload this Excel to SharePoint if needed.")
 
 else:
