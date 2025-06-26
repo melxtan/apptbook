@@ -136,27 +136,19 @@ def move_routine_to_newop(wb):
             elif col_letter == "E":
                 cell.number_format = "hh:mm"
 
-    # 5. Convert New OP to DataFrame and deduplicate ONLY on columns A,B,C,D,E,F,G,U,V
+    # 5. Convert New OP to DataFrame and deduplicate ONLY on columns A to V (indices 0–21)
     all_data = []
     for row in ws_newop.iter_rows(values_only=True):
         all_data.append(list(row) + [None] * (28 - len(row)))  # Ensure 28 cols
-
-    df = pd.DataFrame(all_data)
-
-    # CHANGED: Only deduplicate on columns A,B,C,D,E,F,G,U,V (indices 0,1,2,3,4,5,6,20,21)
-    dedup_indices = [0, 1, 2, 3, 4, 5, 6, 20, 21]
-    date_indices = [3, 7]  # D and H (indices 3 and 7)
     
-    # Deduplicate on ALL columns
+    df = pd.DataFrame(all_data)
     df = df.fillna("")
     
-    # Optionally, normalize data types for key columns as before, but not needed for all unless desired
-    # (Skip normalization if data is clean, or leave as is for time/date columns)
-    
     print(f"Before deduplication: {len(df)} rows")
-    print("Deduplicating on ALL columns")
+    print("Deduplicating on columns A to V only (0–21)")
     
-    df_dedup = df.drop_duplicates(keep='first')
+    # Deduplicate on columns A–V only
+    df_dedup = df.drop_duplicates(subset=list(range(22)), keep='first')
     
     print(f"After deduplication: {len(df_dedup)} rows")
     print(f"Removed {len(df) - len(df_dedup)} duplicate rows")
