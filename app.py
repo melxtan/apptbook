@@ -156,14 +156,14 @@ def move_routine_to_newop(wb):
         # Optional: convert everything to string and strip
         return str(val).strip()
     
-    for col in range(22):  # Columns 0 to 21 (A–V)
+    for col in range(23):  # Columns 0 to 21 (A–V)
         df[col] = df[col].apply(normalize)
     
     print(f"Before deduplication: {len(df)} rows")
     print("Deduplicating on columns A to V only (0–21)")
     
     # Now deduplicate
-    df_dedup = df.drop_duplicates(subset=list(range(22)), keep='first')
+    df_dedup = df.drop_duplicates(subset=list(range(23)), keep='first')
     
     print(f"After deduplication: {len(df_dedup)} rows")
     print(f"Removed {len(df) - len(df_dedup)} duplicate rows")
